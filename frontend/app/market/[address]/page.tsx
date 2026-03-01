@@ -62,7 +62,15 @@ export default function MarketPage({
         yesPool,
         noPool,
         yesPrice,
+        bettingEndTime,
     } = marketInfo;
+
+    // Estimate start time based on typical durations
+    let startTime = Number(endTime) - 3600; // default 1h
+    const bDelta = Number(endTime) - Number(bettingEndTime);
+    if (bDelta === 15 * 60) startTime = Number(endTime) - 3600; // Hourly
+    else if (bDelta === 12 * 3600) startTime = Number(endTime) - 86400; // Daily
+    else if (bDelta === 3 * 86400) startTime = Number(endTime) - 7 * 86400; // Weekly
 
     const totalPool = yesPool + noPool;
     const yesPct = Number(yesPrice) / 1e16;
@@ -192,7 +200,13 @@ export default function MarketPage({
                             overflow: "hidden",
                         }}
                     >
-                        <BtcChart symbol="BTCUSDT" height={280} />
+                        <BtcChart
+                            symbol="BTCUSDT"
+                            height={280}
+                            startTime={startTime}
+                            endTime={Number(endTime)}
+                            bettingEndTime={Number(bettingEndTime)}
+                        />
                     </div>
 
                     {/* Odds visualization */}

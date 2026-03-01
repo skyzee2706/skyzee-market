@@ -6,39 +6,96 @@ import { createChart, AreaSeries, IChartApi, ISeriesApi, Time } from "lightweigh
 interface BtcChartProps {
     symbol?: string; // e.g. "BTCUSDT"
     height?: number;
+    startTime?: number;
+    endTime?: number;
+    bettingEndTime?: number;
 }
 
-export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
+export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime, bettingEndTime }: BtcChartProps) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
 
     const [livePrice, setLivePrice] = useState<number | null>(null);
 
-    // ZERO-GAS SIMULATION: Fetch last 60m of history to frame the chart, then poll live price
+    // ZERO-GAS SIMULATION: Fetch historical and live data
     useEffect(() => {
         let isMounted = true;
 
         async function fetchHistoryAndLive() {
             try {
-                // Fetch last 60 minutes of 1m klines
-                const res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=60");
+                let url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=60`;
+                let intervalSec = 60;
+
+                if (startTime && endTime) {
+                    const duration = endTime - startTime;
+                    let intervalStr = "1m";
+                    if (duration > 3 * 86400) { intervalStr = "1h"; intervalSec = 3600; }
+                    else if (duration > 86400) { intervalStr = "15m"; intervalSec = 900; }
+                    else if (duration > 3600) { intervalStr = "5m"; intervalSec = 300; }
+
+                    url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${intervalStr}&startTime=${startTime * 1000}&limit=1000`;
+                }
+
+                const res = await fetch(url);
                 const data = await res.json();
 
                 if (!isMounted) return;
 
-                const historicalData = data.map((k: any) => ({
+                const historicalData: any[] = data.map((k: any) => ({
                     time: Math.floor(k[0] / 1000) as Time,
                     value: parseFloat(k[4]) // close price
                 }));
 
-                // Set historical data to the series to frame the Auto-Zoom correctly
-                if (seriesRef.current) {
-                    seriesRef.current.setData(historicalData);
-                    chartRef.current?.timeScale().fitContent(); // Fit exactly once on load
+                // Pad future whitespace to lock the X-axis frame up to endTime
+                if (endTime && historicalData.length > 0) {
+                    let lastTime = historicalData[historicalData.length - 1].time as number;
+                    while (lastTime < endTime) {
+                        lastTime += intervalSec;
+                        if (lastTime <= endTime) {
+                            historicalData.push({ time: lastTime as Time });
+                        }
+                    }
+                    if (bettingEndTime && !historicalData.some(d => d.time === bettingEndTime)) {
+                        historicalData.push({ time: bettingEndTime as Time });
+                    }
+                    if (!historicalData.some(d => d.time === endTime)) {
+                        historicalData.push({ time: endTime as Time });
+                    }
+                    historicalData.sort((a, b) => (a.time as number) - (b.time as number));
                 }
 
-                // Also set live price to the latest close
+                if (seriesRef.current) {
+                    seriesRef.current.setData(historicalData);
+
+                    // Add markers for Betting Closes and Market Ended
+                    const markers: any[] = [];
+                    if (bettingEndTime) {
+                        markers.push({
+                            time: bettingEndTime as Time,
+                            position: "aboveBar",
+                            color: "#f59e0b",
+                            shape: "arrowDown",
+                            text: "Betting Closes"
+                        });
+                    }
+                    if (endTime) {
+                        markers.push({
+                            time: endTime as Time,
+                            position: "aboveBar",
+                            color: "#ef4444",
+                            shape: "arrowDown",
+                            text: "Market Ends"
+                        });
+                    }
+                    if (markers.length > 0) {
+                        // Bypass exact generic constraints for older definition files
+                        (seriesRef.current as any).setMarkers(markers);
+                    }
+
+                    chartRef.current?.timeScale().fitContent();
+                }
+
                 if (data.length > 0) {
                     setLivePrice(parseFloat(data[data.length - 1][4]));
                 }
