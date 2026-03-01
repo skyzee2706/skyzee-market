@@ -15,11 +15,39 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
 
     const [livePrice, setLivePrice] = useState<number | null>(null);
 
-    // ZERO-GAS SIMULATION: Fetch live price from Binance instead of slow Testnet Oracle
+    // ZERO-GAS SIMULATION: Fetch last 60m of history to frame the chart, then poll live price
     useEffect(() => {
         let isMounted = true;
 
-        async function fetchBinance() {
+        async function fetchHistoryAndLive() {
+            try {
+                // Fetch last 60 minutes of 1m klines
+                const res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=60");
+                const data = await res.json();
+
+                if (!isMounted) return;
+
+                const historicalData = data.map((k: any) => ({
+                    time: Math.floor(k[0] / 1000) as Time,
+                    value: parseFloat(k[4]) // close price
+                }));
+
+                // Set historical data to the series to frame the Auto-Zoom correctly
+                if (seriesRef.current) {
+                    seriesRef.current.setData(historicalData);
+                    chartRef.current?.timeScale().fitContent(); // Fit exactly once on load
+                }
+
+                // Also set live price to the latest close
+                if (data.length > 0) {
+                    setLivePrice(parseFloat(data[data.length - 1][4]));
+                }
+            } catch (err) {
+                console.error("Binance history error:", err);
+            }
+        }
+
+        async function fetchLive() {
             try {
                 const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
                 const data = await res.json();
@@ -31,8 +59,8 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
             }
         }
 
-        fetchBinance(); // Initial fetch
-        const interval = setInterval(fetchBinance, 2000); // Poll every 2 seconds
+        fetchHistoryAndLive();
+        const interval = setInterval(fetchLive, 2000); // Poll every 2 seconds
 
         return () => {
             isMounted = false;
@@ -92,31 +120,16 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
         chartRef.current = chart;
         seriesRef.current = series;
 
-        // Start drawing the live oracle line directly without historical artifacts
-        const initInterval = setInterval(() => {
-            if (priceRef.current) {
-                clearInterval(initInterval);
-                const p = priceRef.current;
-                const now = Math.floor(Date.now() / 1000);
-                // Seed 1 point in the past just to make the current line visible immediately
-                series.setData([
-                    { time: (now - 2) as Time, value: p },
-                    { time: now as Time, value: p }
-                ]);
-                chart.timeScale().fitContent();
-            }
-        }, 500);
-
         // Tick every 1 second continuously matching real time updates
         const interval = setInterval(() => {
-            if (priceRef.current) {
+            if (priceRef.current && seriesRef.current) {
                 const now = Math.floor(Date.now() / 1000) as Time;
-                series.update({
+                seriesRef.current.update({
                     time: now,
                     value: priceRef.current
                 });
-                // Ensure chart follows the new price if it goes out of view
-                chart.timeScale().fitContent();
+                // The library natively auto-scrolls horizontally if timeVisible: true
+                // and vertically scales automatically. No continuous fitContent() needed!
             }
         }, 1000);
 
@@ -128,7 +141,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
         window.addEventListener("resize", handleResize);
 
         return () => {
-            clearInterval(initInterval);
             clearInterval(interval);
             window.removeEventListener("resize", handleResize);
             chart.remove();

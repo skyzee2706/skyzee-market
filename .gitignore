@@ -5,3 +5,13 @@ cache/
 artifacts/
 typechain-types/
 coverage/
+
+# Debug & Temporary Files
+deploy-output.txt
+derived_addresses.txt
+deploy-output-utf8.txt
+deploy-clean.txt
+deploy_log.txt
+compile_log.txt
+addr.txt
+*.log
