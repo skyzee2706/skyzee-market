@@ -206,6 +206,7 @@ export default function MarketPage({
                             startTime={startTime}
                             endTime={Number(endTime)}
                             bettingEndTime={Number(bettingEndTime)}
+                            strikePrice={Number(strikePrice) / 1e8}
                         />
                     </div>
 

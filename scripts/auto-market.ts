@@ -120,17 +120,20 @@ async function getOnChainBTCPrice(): Promise<bigint> {
  * ZERO-GAS SIMULATION: Fetch live price from Binance instead of slow testnet Oracle.
  * Formats price to 8 decimals to match Chainlink USD standard.
  */
-async function getLiveBinancePrice(): Promise<bigint> {
-    try {
-        const response = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
-        const rawPriceFloat = parseFloat(response.data.price);
-        // Convert to 8 decimals format: $66500.50 -> 6650050000000
-        const price8Decimals = Math.floor(rawPriceFloat * 1e8);
-        return BigInt(price8Decimals);
-    } catch (err) {
-        console.warn("⚠️ Binance API failed, falling back to Chainlink Oracle");
-        return getOnChainBTCPrice();
+async function getLiveBinancePrice(retries = 3): Promise<bigint> {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const response = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", { timeout: 5000 });
+            const rawPriceFloat = parseFloat(response.data.price);
+            const price8Decimals = Math.floor(rawPriceFloat * 1e8);
+            return BigInt(price8Decimals);
+        } catch (err) {
+            console.warn(`⚠️ Binance API failed (attempt ${i + 1}/${retries}). Retrying...`);
+            if (i === retries - 1) throw new Error("Binance API completely unreachable. Cannot resolve or create market fairly.");
+            await new Promise(r => setTimeout(r, 3000));
+        }
     }
+    return 0n;
 }
 
 async function createMarket(question: string, strikePrice: bigint, endTime: number, bettingEndTime: number) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createChart, AreaSeries, IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import { createChart, BaselineSeries, IChartApi, ISeriesApi, Time } from "lightweight-charts";
 
 interface BtcChartProps {
     symbol?: string; // e.g. "BTCUSDT"
@@ -9,12 +9,13 @@ interface BtcChartProps {
     startTime?: number;
     endTime?: number;
     bettingEndTime?: number;
+    strikePrice?: number;
 }
 
-export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime, bettingEndTime }: BtcChartProps) {
+export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime, bettingEndTime, strikePrice }: BtcChartProps) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
-    const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+    const seriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
 
     const [livePrice, setLivePrice] = useState<number | null>(null);
 
@@ -162,10 +163,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             },
         });
 
-        const series = chart.addSeries(AreaSeries, {
-            lineColor: "#6366f1",
-            topColor: "rgba(99, 102, 241, 0.4)",
-            bottomColor: "rgba(99, 102, 241, 0.05)",
+        const series = chart.addSeries(BaselineSeries, {
+            baseValue: { type: 'price', price: strikePrice || 0 },
+            topLineColor: '#22c55e',          // tailwind green-500
+            topFillColor1: 'rgba(34, 197, 94, 0.28)',
+            topFillColor2: 'rgba(34, 197, 94, 0.05)',
+            bottomLineColor: '#ef4444',       // tailwind red-500
+            bottomFillColor1: 'rgba(239, 68, 68, 0.05)',
+            bottomFillColor2: 'rgba(239, 68, 68, 0.28)',
             lineWidth: 2,
             priceFormat: {
                 type: "price",
@@ -173,6 +178,17 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 minMove: 0.01,
             },
         });
+
+        if (strikePrice) {
+            series.createPriceLine({
+                price: strikePrice,
+                color: '#f8fafc',
+                lineWidth: 1,
+                lineStyle: 1, // Dotted
+                axisLabelVisible: true,
+                title: 'Strike',
+            });
+        }
 
         chartRef.current = chart;
         seriesRef.current = series;
