@@ -25,9 +25,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
 
     const oraclePrice = oraclePriceData ? Number(formatUnits(oraclePriceData as bigint, 8)) : null;
 
-    // Mutable ref to access latest price inside interval closures without restating effect
     const priceRef = useRef<number | null>(null);
-    priceRef.current = oraclePrice;
+
+    // Keep the ref updated with the latest price without causing the chart to rebuild
+    useEffect(() => {
+        if (oraclePrice !== null) {
+            priceRef.current = oraclePrice;
+        }
+    }, [oraclePrice]);
 
     useEffect(() => {
         if (!chartContainerRef.current) return;
@@ -95,6 +100,8 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
                     time: now,
                     value: priceRef.current
                 });
+                // Ensure chart follows the new price if it goes out of view
+                chart.timeScale().fitContent();
             }
         }, 1000);
 
