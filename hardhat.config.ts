@@ -25,6 +25,10 @@ const config: HardhatUserConfig = {
     etherscan: {
         apiKey: ETHERSCAN_API_KEY,
     },
+    // Temporarily disabled to bypass Windows IO build crash
+    typechain: {
+        dontOverrideCompile: true
+    },
     paths: {
         sources: "./contracts",
         tests: "./test",

@@ -171,6 +171,20 @@ contract PredictionMarket is Ownable {
         emit MarketResolved(result, price);
     }
 
+    /**
+     * @notice EXCLUSIVE FOR ZERO-GAS PM2 SIMULATION:
+     *         Resolves the market using a specific price injected by the PM2 bot 
+     *         directly from the Binance API, perfectly matching the frontend chart.
+     *         Only callable by the Factory (Owner).
+     */
+    function resolveWithCustomPrice(uint256 price) external afterEnd onlyOwner {
+        require(!resolved, "Already resolved");
+        result = price >= strikePrice; 
+        settlementPrice = price;
+        resolved = true;
+        emit MarketResolved(result, price);
+    }
+
     // ── Claim ─────────────────────────────────────────────────────────────
 
     /**

@@ -10,8 +10,7 @@ async function main() {
     console.log("1/4 Deploying SkyUSDT...");
     const SkyUSDT = await ethers.getContractFactory("SkyUSDT");
     const skyUsdt = await SkyUSDT.deploy(deployer.address);
-    await skyUsdt.waitForDeployment();
-    const usdtAddr = await skyUsdt.getAddress();
+    const usdtAddr = skyUsdt.target;
     console.log(`   SkyUSDT: ${usdtAddr}`);
 
     // ── 2. Oracles ────────────────────────────────────────────────────────
@@ -24,21 +23,18 @@ async function main() {
     const Oracle = await ethers.getContractFactory("ChainlinkOracle");
 
     const btcOracle = await Oracle.deploy(BTC_USD_SEPOLIA);
-    await btcOracle.waitForDeployment();
-    const btcOracleAddr = await btcOracle.getAddress();
+    const btcOracleAddr = btcOracle.target;
     console.log(`   BTC/USD Oracle: ${btcOracleAddr}`);
 
     const ethOracle = await Oracle.deploy(ETH_USD_SEPOLIA);
-    await ethOracle.waitForDeployment();
-    const ethOracleAddr = await ethOracle.getAddress();
+    const ethOracleAddr = ethOracle.target;
     console.log(`   ETH/USD Oracle: ${ethOracleAddr}`);
 
     // ── 3. MarketFactory ──────────────────────────────────────────────────
     console.log("3/4 Deploying MarketFactory...");
     const Factory = await ethers.getContractFactory("MarketFactory");
     const factory = await Factory.deploy(btcOracleAddr, ethOracleAddr, usdtAddr, deployer.address);
-    await factory.waitForDeployment();
-    const factoryAddr = await factory.getAddress();
+    const factoryAddr = factory.target;
     console.log(`   MarketFactory: ${factoryAddr}`);
 
     // ── Summary ───────────────────────────────────────────────────────────

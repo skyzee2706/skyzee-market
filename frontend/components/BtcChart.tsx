@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createChart, AreaSeries, IChartApi, ISeriesApi, Time } from "lightweight-charts";
-import { useReadContract } from "wagmi";
-import { formatUnits } from "viem";
 
 interface BtcChartProps {
     symbol?: string; // e.g. "BTCUSDT"
@@ -15,24 +13,41 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
 
-    // Fetch Chainlink Oracle Price automatically
-    const { data: oraclePriceData } = useReadContract({
-        address: process.env.NEXT_PUBLIC_ORACLE_ADDRESS as `0x${string}`,
-        abi: [{ type: "function", name: "getPrice", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] }] as const,
-        functionName: "getPrice",
-        query: { refetchInterval: 2000 },
-    });
+    const [livePrice, setLivePrice] = useState<number | null>(null);
 
-    const oraclePrice = oraclePriceData ? Number(formatUnits(oraclePriceData as bigint, 8)) : null;
+    // ZERO-GAS SIMULATION: Fetch live price from Binance instead of slow Testnet Oracle
+    useEffect(() => {
+        let isMounted = true;
+
+        async function fetchBinance() {
+            try {
+                const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
+                const data = await res.json();
+                if (isMounted && data.price) {
+                    setLivePrice(parseFloat(data.price));
+                }
+            } catch (err) {
+                console.error("Binance API error:", err);
+            }
+        }
+
+        fetchBinance(); // Initial fetch
+        const interval = setInterval(fetchBinance, 2000); // Poll every 2 seconds
+
+        return () => {
+            isMounted = false;
+            clearInterval(interval);
+        };
+    }, []);
 
     const priceRef = useRef<number | null>(null);
 
     // Keep the ref updated with the latest price without causing the chart to rebuild
     useEffect(() => {
-        if (oraclePrice !== null) {
-            priceRef.current = oraclePrice;
+        if (livePrice !== null) {
+            priceRef.current = livePrice;
         }
-    }, [oraclePrice]);
+    }, [livePrice]);
 
     useEffect(() => {
         if (!chartContainerRef.current) return;
@@ -141,9 +156,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300 }: BtcChartProps) {
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
                     <span style={{ fontSize: "28px", fontWeight: 800, color: "var(--text-primary)", fontFamily: "monospace" }}>
-                        {oraclePrice ? `$${oraclePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Loading..."}
+                        {livePrice ? `$${livePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Loading..."}
                     </span>
-                    {oraclePrice && (
+                    {livePrice && (
                         <span style={{
                             width: "8px", height: "8px", borderRadius: "50%",
                             background: "#6366f1",

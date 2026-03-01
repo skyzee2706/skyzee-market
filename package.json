@@ -21,6 +21,9 @@
         "@chainlink/contracts": "^1.2.0",
         "@openzeppelin/contracts": "^5.0.2",
         "@types/node-cron": "^3.0.11",
-        "node-cron": "^4.2.1"
+        "axios": "^1.13.6",
+        "ethers": "^6.13.0",
+        "node-cron": "^4.2.1",
+        "web3": "^4.16.0"
     }
 }

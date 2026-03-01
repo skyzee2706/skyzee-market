@@ -20,6 +20,7 @@ dotenv.config();
 
 import { ethers } from "ethers";
 import cron from "node-cron";
+import axios from "axios";
 
 // ── Config ────────────────────────────────────────────────────────────────
 const RPC_URL = process.env.SEPOLIA_RPC_URL || "";
@@ -48,6 +49,7 @@ const MARKET_ABI = [
     "function endTime() external view returns (uint256)",
     "function resolved() external view returns (bool)",
     "function resolve() external",
+    "function resolveWithCustomPrice(uint256 price) external",
     "function question() external view returns (string)"
 ];
 
@@ -114,6 +116,23 @@ async function getOnChainBTCPrice(): Promise<bigint> {
     return price;
 }
 
+/** 
+ * ZERO-GAS SIMULATION: Fetch live price from Binance instead of slow testnet Oracle.
+ * Formats price to 8 decimals to match Chainlink USD standard.
+ */
+async function getLiveBinancePrice(): Promise<bigint> {
+    try {
+        const response = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
+        const rawPriceFloat = parseFloat(response.data.price);
+        // Convert to 8 decimals format: $66500.50 -> 6650050000000
+        const price8Decimals = Math.floor(rawPriceFloat * 1e8);
+        return BigInt(price8Decimals);
+    } catch (err) {
+        console.warn("⚠️ Binance API failed, falling back to Chainlink Oracle");
+        return getOnChainBTCPrice();
+    }
+}
+
 async function createMarket(question: string, strikePrice: bigint, endTime: number, bettingEndTime: number) {
     const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
     console.log(`\n📝 Creating market...`);
@@ -149,7 +168,11 @@ async function resolveMarkets() {
                 console.log(`   ⚡ Resolving: ${question}`);
                 console.log(`      Contract: ${marketAddr}`);
                 try {
-                    const tx = await market.resolve();
+                    // ZERO-GAS SIMULATION: fetch the exact dancing price on UI right now
+                    const binancePrice = await getLiveBinancePrice();
+                    console.log(`      📡 Injecting Live Binance Price: $${(Number(binancePrice) / 1e8).toLocaleString()}`);
+
+                    const tx = await market.resolveWithCustomPrice(binancePrice);
                     const receipt = await tx.wait();
                     console.log(`      ✅ Resolved in block ${receipt.blockNumber}`);
                     resolvedCount++;
@@ -182,7 +205,7 @@ async function resolveMarkets() {
 async function runHourly() {
     console.log(`\n⏰ [HOURLY] ${new Date().toUTCString()}`);
     try {
-        const price = await getOnChainBTCPrice();
+        const price = await getLiveBinancePrice(); // Use Binance for baseline so question matches UI perfectly
         const endTime = nextHourUTC();
         const bettingEndTime = endTime - 15 * 60;  // close 15 mins early
         const label = formatHourUTC(endTime);
@@ -197,7 +220,7 @@ async function runHourly() {
 async function runDaily() {
     console.log(`\n📅 [DAILY] ${new Date().toUTCString()}`);
     try {
-        const price = await getOnChainBTCPrice();
+        const price = await getLiveBinancePrice(); // Use Binance
         const endTime = nextMidnightUTC();
         const bettingEndTime = endTime - 12 * 60 * 60; // close 12 hrs early
         const label = formatDateUTC(endTime);
@@ -212,7 +235,7 @@ async function runDaily() {
 async function runWeekly() {
     console.log(`\n📅 [WEEKLY] ${new Date().toUTCString()}`);
     try {
-        const price = await getOnChainBTCPrice();
+        const price = await getLiveBinancePrice(); // Use Binance
         const endTime = nextWeekUTC();
         const bettingEndTime = endTime - 3 * 24 * 60 * 60; // close 3 days early
         const label = formatDateUTC(endTime);
