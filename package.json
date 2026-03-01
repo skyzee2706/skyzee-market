@@ -1,0 +1,26 @@
+{
+    "name": "prediction-market-contracts",
+    "version": "1.0.0",
+    "description": "Polymarket-inspired prediction market contracts on Sepolia",
+    "scripts": {
+        "compile": "hardhat compile",
+        "test": "hardhat test",
+        "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia",
+        "export-abi": "node scripts/export-abi.js",
+        "auto-market": "ts-node scripts/auto-market.ts"
+    },
+    "devDependencies": {
+        "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+        "@types/node": "^20.0.0",
+        "dotenv": "^16.4.0",
+        "hardhat": "^2.22.0",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.4.0"
+    },
+    "dependencies": {
+        "@chainlink/contracts": "^1.2.0",
+        "@openzeppelin/contracts": "^5.0.2",
+        "@types/node-cron": "^3.0.11",
+        "node-cron": "^4.2.1"
+    }
+}

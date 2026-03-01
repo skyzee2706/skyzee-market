@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary:   #0a0b0f;
+  --bg-secondary: #111318;
+  --bg-card:      #16181f;
+  --bg-elevated:  #1c1f2a;
+  --border:       #272a38;
+  --text-primary: #f0f1f5;
+  --text-secondary: #8a8fa8;
+  --text-muted:   #555b78;
+  --accent-yes:   #22c55e;
+  --accent-no:    #ef4444;
+  --accent-blue:  #6366f1;
+  --accent-blue-hover: #4f52e0;
+  --gold:         #f59e0b;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Glow utility */
+.glow-yes { box-shadow: 0 0 20px rgba(34, 197, 94, 0.15); }
+.glow-no  { box-shadow: 0 0 20px rgba(239, 68, 68, 0.15); }
+
+/* Animated gradient border */
+@keyframes borderPulse {
+  0%, 100% { border-color: var(--border); }
+  50%       { border-color: var(--accent-blue); }
+}
+.border-pulse { animation: borderPulse 3s ease-in-out infinite; }
+
+/* Odds bar animation */
+@keyframes slideIn {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.odds-bar { transform-origin: left; animation: slideIn 0.6s ease-out forwards; }
