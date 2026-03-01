@@ -10,7 +10,7 @@
 - **On-Chain Truth:** All markets are resolved deterministically using Chainlink Price Feeds (BTC/USD and ETH/USD).
 - **Time-Gated Betting Windows:** Betting closes dynamically *prior* to settlement (e.g., 15 mins before for hourly, 12 hours for daily) to prevent last-minute sniping and ensure fairness.
 - **Transparent Settlement Tracking:** The exact fractional Chainlink precision price is saved permanently on-chain in `settlementPrice` when the market resolves.
-- **Real-Time Oracle Integrations:** Natively fetches exact price movements via standard smart-contracts directly to the UI's live chart in real-time, completely wiping off-chain historical artifacts.
+- **Zero-Gas Live Simulated Oracle:** Real-time Binance API integration on the frontend provides a dynamic, continuous price chart for free, while the PM2 backend bot perfectly syncs and injects the same momentary price on-chain at closure using `resolveWithCustomPrice()`.
 - **Resettable Volume Leaderboard:** Tracks trading volumes natively utilizing `BetPlaced` Event Logs directly from Web3, sortable and viewable instantly without centralized backend servers. 
 - **Automated Market Bots:** Built-in Node/PM2 configurations (`auto-market.ts`) autonomously resolve expiring markets and indefinitely spin up matching recursive markets on automated schedules (Hourly, Daily, Weekly).
 
@@ -114,6 +114,20 @@ The daemon will now run silently. It checks active markets every 60 seconds. Whe
 - **Platform Fee**: **1%** on net winnings only. 
 - Original bets are returned cleanly. The owner account can invoke `withdrawFees()` to sweep platform revenue.
 - **Oracle Upgrade Path**: If transitioning to an alt oracle (e.g. Rialo), just deploy an implementation of `IPriceOracle.sol` and call `MarketFactory.setOracle(addr)`. PredictionMarket contracts are intrinsically agnostic.
+
+---
+
+## 5️⃣ Vercel Deployment
+
+Because the project places the Next.js app inside a nested `frontend/` folder, you must define the **Root Directory** inside Vercel or the deployment will fail.
+
+1. Import your GitHub repository into Vercel.
+2. Under "Framework Preset", ensure Next.js is selected.
+3. Open **"Root Directory"** and type `frontend`.
+4. Add all environment variables from your `.env.local` to the Vercel Environment Variables section.
+5. Click **Deploy**. Vercel will now properly find and build the Next.js app.
+
+---
 
 | Link | Resource |
 |---|---|
