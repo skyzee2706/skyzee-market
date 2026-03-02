@@ -28,7 +28,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
             try {
                 let historicalData: any[] = [];
-                let intervalSec = 300; // 5m default
 
                 // 1. Try CoinGecko First
                 try {
@@ -147,12 +146,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 timeVisible: true,
                 secondsVisible: false,
                 shiftVisibleRangeOnNewBar: false,
-                fixLeftEdge: true,  // Absolutely lock the StartTime to the Left Edge
-                fixRightEdge: true, // Absolutely lock the EndTime to the Right Edge
+                fixLeftEdge: true,
+                fixRightEdge: true,
                 lockVisibleTimeRangeOnResize: true,
                 tickMarkFormatter: (time: Time) => {
                     const date = new Date((time as number) * 1000);
-                    // Use standard en-US so it explicitly puts AM/PM
                     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
                 },
             },
@@ -167,10 +165,10 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
         const series = chart.addSeries(BaselineSeries, {
             baseValue: { type: 'price', price: strikePrice || 0 },
-            topLineColor: '#22c55e',          // tailwind green-500
+            topLineColor: '#22c55e',
             topFillColor1: 'rgba(34, 197, 94, 0.28)',
             topFillColor2: 'rgba(34, 197, 94, 0.05)',
-            bottomLineColor: '#ef4444',       // tailwind red-500
+            bottomLineColor: '#ef4444',
             bottomFillColor1: 'rgba(239, 68, 68, 0.05)',
             bottomFillColor2: 'rgba(239, 68, 68, 0.28)',
             lineWidth: 2,
@@ -181,9 +179,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             },
             autoscaleInfoProvider: (original: any) => {
                 const res = original();
-
-                // CRUCIAL FIX: Ensure our extreme live prices are ALWAYS considered in the min/max calculation 
-                // so the chart perfectly zooms out and never cuts off the green/red line at the bottom or top.
                 let currentMin = strikePrice || 0;
                 let currentMax = strikePrice || 0;
 
@@ -202,7 +197,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                         Math.abs(currentMax - strikePrice),
                         Math.abs(currentMin - strikePrice)
                     );
-                    const padding = maxDiff * 0.15; // 15% padding above and below
+                    const padding = maxDiff * 0.15;
 
                     if (maxDiff === 0) {
                         return { priceRange: { minValue: strikePrice - 100, maxValue: strikePrice + 100 }, margins: { above: 0, below: 0 } };
@@ -212,7 +207,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                             minValue: strikePrice - maxDiff - padding,
                             maxValue: strikePrice + maxDiff + padding,
                         },
-                        margins: { above: 0, below: 0 } // Eliminates auto-margins so it stays exactly centered
+                        margins: { above: 0, below: 0 }
                     };
                 }
                 return res;
@@ -225,31 +220,26 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             crosshairMarkerVisible: false,
             priceLineVisible: false,
             lastValueVisible: false,
-            // Prevent invisible baseline from warping Y-axis symmetry
             autoscaleInfoProvider: () => null,
         });
 
-        // The Invisible Series provides the explicit shared global time Grid.
         if (startTime && endTime) {
             const timeData: any[] = [];
             let t = startTime;
             while (t <= endTime) {
                 timeData.push({ time: t as Time, value: strikePrice || 0 });
-                t += 300; // Lay out 5 min rigid empty track
+                t += 300;
             }
             if (bettingEndTime) timeData.push({ time: bettingEndTime as Time, value: strikePrice || 0 });
             timeData.push({ time: endTime as Time, value: strikePrice || 0 });
 
             timeData.sort((a, b) => (a.time as number) - (b.time as number));
-
-            // Deduplicate to satisfy strict monotonic order
             const uniqueTimeData = timeData.filter((item, pos, ary) => {
                 return !pos || item.time !== ary[pos - 1].time;
             });
 
             invisibleSeries.setData(uniqueTimeData);
 
-            // Anchor Markers into the concrete invisible layout
             const markers: any[] = [];
             if (bettingEndTime) {
                 markers.push({
@@ -273,7 +263,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 (invisibleSeries as any).setMarkers(markers);
             }
 
-            // Lock visible range onto the explicit grid bounds
             chart.timeScale().setVisibleRange({
                 from: startTime as Time,
                 to: endTime as Time
@@ -283,9 +272,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         if (strikePrice) {
             series.createPriceLine({
                 price: strikePrice,
-                color: '#06b6d4', // Cyan for Target line
+                color: '#06b6d4',
                 lineWidth: 2,
-                lineStyle: 3, // 3 = Dashed, 2 = Dotted
+                lineStyle: 3,
                 axisLabelVisible: true,
                 title: 'Target',
             });
@@ -294,15 +283,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         chartRef.current = chart;
         seriesRef.current = series;
 
-        // Tick every 1 second continuously matching real time updates
         const updateInterval = setInterval(() => {
             if (priceRef.current && seriesRef.current) {
                 const currentTimestamp = Math.floor(Date.now() / 1000);
-
-                // Stop updates if market ended
                 if (endTime && currentTimestamp > endTime) return;
 
-                // Strict monotonic update
                 if (currentTimestamp >= lastUpdatedTimeRef.current) {
                     seriesRef.current.update({
                         time: currentTimestamp as Time,
@@ -311,9 +296,8 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     lastUpdatedTimeRef.current = currentTimestamp;
                 }
 
-                // Sync vertical line
-                if (bettingEndTime) {
-                    const xPos = chart.timeScale().timeToCoordinate(bettingEndTime as Time);
+                if (bettingEndTime && chartRef.current) {
+                    const xPos = chartRef.current.timeScale().timeToCoordinate(bettingEndTime as Time);
                     const lineDiv = document.getElementById("closed-bet-line");
                     if (lineDiv && xPos !== null) {
                         lineDiv.style.left = `${xPos}px`;
@@ -323,19 +307,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             }
         }, 1000);
 
-        // SYNC TIMELINE EDGE (Enforce left-to-right on data load)
-        if (startTime && endTime) {
-            setTimeout(() => {
-                chart.timeScale().setVisibleRange({
-                    from: startTime as Time,
-                    to: endTime as Time
-                });
-            }, 100);
-        }
-
         const handleResize = () => {
-            if (chartContainerRef.current) {
-                chart.applyOptions({
+            if (chartContainerRef.current && chartRef.current) {
+                chartRef.current.applyOptions({
                     width: chartContainerRef.current.clientWidth,
                     height: chartContainerRef.current.clientHeight
                 });
@@ -359,7 +333,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
     return (
         <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "hidden" }}>
-            {/* Header / HUD */}
             <div style={{
                 padding: "16px 16px 8px 16px",
                 display: "flex",
@@ -390,18 +363,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 </div>
             </div>
 
-            {/* Chart Area */}
             <div style={{ position: "relative", flexGrow: 1, width: "100%" }}>
-                {/* The ref container explicitly stretches across the bounds */}
                 <div ref={chartContainerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
-
-                {/* Vertical Closed Bet Line Overlay */}
                 <div
                     id="closed-bet-line"
                     style={{
                         position: "absolute",
                         top: "0px",
-                        bottom: "26px", // Leave exactly 26px explicit bottom space so it doesn't overlap the X-axis time labels
+                        bottom: "26px",
                         width: "1px",
                         borderLeft: "2px dashed #4b5563",
                         pointerEvents: "none",

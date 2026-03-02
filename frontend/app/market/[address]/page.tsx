@@ -190,6 +190,7 @@ export default function MarketPage({
 
                     {/* BTC Chart */}
                     <div
+                        key={`${marketAddress}-${startTime}-${endTime}`}
                         style={{
                             background: "var(--bg-card)",
                             border: "1px solid var(--border)",
