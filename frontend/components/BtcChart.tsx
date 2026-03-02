@@ -22,7 +22,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
     const priceRef = useRef<number | null>(null);
     const lastUpdatedTimeRef = useRef<number>(0);
 
-    // Default betting time to 15m before endTime if not provided
+    // Default betting time to exactly 15m before endTime if not provided
     const actualBettingEndTime = bettingEndTime || (endTime ? endTime - 900 : undefined);
 
     useEffect(() => {
@@ -74,21 +74,18 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
 
                     seriesRef.current.setData(sanitized);
 
-                    // --- THE FIX: FORCING A LINEAR TIMESCALE ---
+                    // --- FORCING A LINEAR TIMESCALE ---
                     // Populate an invisible series with points every 60s for the entire duration.
-                    // This forces Lightweight Charts to allot space for every minute, making the axis 1:1 with time.
                     const fullTimeline: any[] = [];
                     for (let t = startTime; t <= endTime; t += 60) {
                         fullTimeline.push({ time: t as Time, value: strikePrice || 0 });
                     }
-                    // Ensure the exact end time point is included
                     if (fullTimeline[fullTimeline.length - 1].time !== (endTime as Time)) {
                         fullTimeline.push({ time: endTime as Time, value: strikePrice || 0 });
                     }
                     invisibleSeriesRef.current.setData(fullTimeline);
 
                     try {
-                        // Pin the visible range to the market window
                         chartRef.current.timeScale().setVisibleRange({
                             from: startTime as Time,
                             to: endTime as Time
@@ -126,20 +123,21 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
         if (!chartContainerRef.current) return;
 
         const chart = createChart(chartContainerRef.current, {
-            height,
+            // Remove height here to allow absolute container to control it
+            autoSize: true,
             layout: {
                 background: { type: ColorType.Solid, color: "#0a0a0a" },
-                textColor: "#D1D4DC", // Brighter text for better visibility
-                fontSize: 12,
+                textColor: "#A3A8B8",
+                fontSize: 11,
                 fontFamily: "'Inter', sans-serif",
             },
             grid: {
-                vertLines: { color: "rgba(255, 255, 255, 0.05)" },
-                horzLines: { color: "rgba(255, 255, 255, 0.05)" },
+                vertLines: { color: "rgba(255, 255, 255, 0.04)" },
+                horzLines: { color: "rgba(255, 255, 255, 0.04)" },
             },
             rightPriceScale: {
                 borderVisible: false,
-                scaleMargins: { top: 0.15, bottom: 0.15 },
+                scaleMargins: { top: 0.2, bottom: 0.2 },
                 autoScale: true,
             },
             timeScale: {
@@ -150,26 +148,25 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
                 fixRightEdge: true,
                 lockVisibleTimeRangeOnResize: true,
                 shiftVisibleRangeOnNewBar: false,
-                rightOffset: 0,
             },
             crosshair: {
                 mode: 1,
-                vertLine: { color: 'rgba(255, 255, 255, 0.2)', style: 3, labelVisible: true },
-                horzLine: { color: 'rgba(255, 255, 255, 0.2)', style: 3, labelVisible: true },
+                vertLine: { color: 'rgba(255, 255, 255, 0.15)', style: 3, labelVisible: true },
+                horzLine: { color: 'rgba(255, 255, 255, 0.15)', style: 3, labelVisible: true },
             },
-            // ABSOLUTE INTERACTION LOCKING - NO MOVEMENT ALLOWED
+            // ABSOLUTE INTERACTION LOCKING
             handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
             handleScale: { mouseWheel: false, pinch: false, axisPressedMouseMove: false, axisDoubleClickReset: false },
         });
 
         const series = chart.addSeries(BaselineSeries, {
             baseValue: { type: 'price', price: strikePrice || 0 },
-            topLineColor: '#9cfc0d', // High-fidelity "Toxic" Green
-            topFillColor1: 'rgba(156, 252, 13, 0.3)',
-            topFillColor2: 'rgba(156, 252, 13, 0.02)',
-            bottomLineColor: '#ff2d55', // Vibrant Red
-            bottomFillColor1: 'rgba(255, 45, 85, 0.02)',
-            bottomFillColor2: 'rgba(255, 45, 85, 0.3)',
+            topLineColor: '#9cfc0d',
+            topFillColor1: 'rgba(156, 252, 13, 0.25)',
+            topFillColor2: 'rgba(156, 252, 13, 0.01)',
+            bottomLineColor: '#ff375f',
+            bottomFillColor1: 'rgba(255, 55, 95, 0.01)',
+            bottomFillColor2: 'rgba(255, 55, 95, 0.25)',
             lineWidth: 2,
             priceLineVisible: false,
             lastValueVisible: true,
@@ -177,13 +174,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
                 const res = original();
                 if (strikePrice && res?.priceRange) {
                     const mid = strikePrice;
-                    const min = res.priceRange.minValue;
-                    const max = res.priceRange.maxValue;
-                    const diff = Math.max(Math.abs(max - mid), Math.abs(min - mid), 30);
+                    const diff = Math.max(Math.abs(res.priceRange.maxValue - mid), Math.abs(res.priceRange.minValue - mid), 30);
                     return {
                         priceRange: {
-                            minValue: mid - diff * 1.4,
-                            maxValue: mid + diff * 1.4,
+                            minValue: mid - diff * 1.5,
+                            maxValue: mid + diff * 1.5,
                         },
                     };
                 }
@@ -191,7 +186,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
             }
         });
 
-        // The hidden series that forces the linear time axis
         const invisible = chart.addSeries(LineSeries, {
             color: 'transparent',
             lineWidth: 0,
@@ -204,7 +198,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
         if (strikePrice) {
             series.createPriceLine({
                 price: strikePrice,
-                color: '#00ccff', // Accurate Cyan
+                color: '#00ccff',
                 lineWidth: 1,
                 lineStyle: 3,
                 axisLabelVisible: true,
@@ -216,7 +210,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
         seriesRef.current = series;
         invisibleSeriesRef.current = invisible;
 
-        // Force initial data if possible
+        // Force initial timeline
         if (startTime && endTime) {
             const initialTimeline: any[] = [];
             for (let t = startTime; t <= endTime; t += 60) initialTimeline.push({ time: t as Time, value: strikePrice || 0 });
@@ -229,8 +223,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
         const loop = setInterval(() => {
             if (priceRef.current && seriesRef.current && chartRef.current) {
                 const now = Math.floor(Date.now() / 1000);
-
-                // Stop updating if market ended
                 if (endTime && now >= endTime) return;
 
                 if (now > lastUpdatedTimeRef.current) {
@@ -238,14 +230,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
                     lastUpdatedTimeRef.current = now;
                 }
 
-                // KEEP WINDOW LOCKED every second to prevent any drift or rounding errors
+                // Strictly enforce visible range
                 if (startTime && endTime) {
                     const ts = chartRef.current.timeScale();
                     try {
-                        const vr = ts.getVisibleRange();
-                        if (vr && (vr.from !== startTime || vr.to !== endTime)) {
-                            ts.setVisibleRange({ from: startTime as Time, to: endTime as Time });
-                        }
+                        ts.setVisibleRange({ from: startTime as Time, to: endTime as Time });
                     } catch (e) { }
 
                     // Reposition custom DOM overlays
@@ -280,52 +269,51 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
     const isAbove = livePrice !== null && strikePrice !== null && livePrice > strikePrice;
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "hidden", position: "relative", background: "#0a0a0a", borderRadius: "8px" }}>
-            {/* Header Layout per 1000000% request */}
+        <div style={{ display: "flex", flexDirection: "column", width: "100%", height: `${height}px`, overflow: "hidden", position: "relative", background: "#0a0a0a", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.05)" }}>
+            {/* High-Fidelity Header */}
             <div style={{
-                position: "absolute", top: "14px", left: "20px", right: "20px",
+                position: "absolute", top: "16px", left: "20px", right: "20px",
                 display: "flex", justifyContent: "space-between", alignItems: "center",
-                zIndex: 20, pointerEvents: "none", userSelect: "none"
+                zIndex: 50, pointerEvents: "none", userSelect: "none"
             }}>
                 <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                    <span style={{ fontSize: "14px", fontWeight: 700, color: "#fff", letterSpacing: "0.5px" }}>{symbol.replace("USDT", "/USD")}</span>
+                    <span style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>{symbol.replace("USDT", "/USD")}</span>
                     <span style={{ fontSize: "14px", color: "rgba(255,255,255,0.2)" }}>•</span>
                     <span style={{ fontSize: "10px", color: "#9cfc0d", fontWeight: 700 }}>LIVE</span>
                     <span style={{
                         fontSize: "10px",
-                        background: isAbove ? "rgba(156,252,13,0.12)" : "rgba(255, 45, 85, 0.12)",
-                        color: isAbove ? "#9cfc0d" : "#ff2d55",
+                        background: isAbove ? "rgba(156,252,13,0.1)" : "rgba(255, 55, 95, 0.1)",
+                        color: isAbove ? "#9cfc0d" : "#ff375f",
                         padding: "3px 8px", borderRadius: "4px", fontWeight: 900,
-                        border: isAbove ? "1px solid rgba(156,252,13,0.3)" : "1px solid rgba(255, 45, 85, 0.3)"
+                        border: isAbove ? "1px solid rgba(156,252,13,0.3)" : "1px solid rgba(255, 55, 95, 0.3)"
                     }}>
                         {isAbove ? "ABOVE" : "BELOW"}
                     </span>
                 </div>
 
                 <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
-                    <div style={{ fontSize: "13px" }}>
-                        <span style={{ color: "#00ccff", fontWeight: 500 }}>Target</span> <span style={{ fontFamily: "monospace", color: "#00ccff", fontWeight: 700 }}>${strikePrice?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <div>
+                        <span style={{ color: "#00ccff", fontSize: "13px", fontWeight: 500 }}>Target</span> <span style={{ fontFamily: "monospace", color: "#00ccff", fontWeight: 700, fontSize: "13px" }}>${strikePrice?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
-                    <div style={{ width: "1px", height: "12px", background: "rgba(255,255,255,0.2)" }} />
-                    <div style={{ fontSize: "13px" }}>
-                        <span style={{ color: "rgba(255,255,255,0.6)", fontWeight: 500 }}>Current</span> <span style={{ fontFamily: "monospace", color: "#fff", fontWeight: 800, fontSize: "16px" }}>${livePrice?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <div style={{ width: "1px", height: "14px", background: "rgba(255,255,255,0.15)" }} />
+                    <div>
+                        <span style={{ color: "rgba(255,255,255,0.6)", fontSize: "13px", fontWeight: 500 }}>Current</span> <span style={{ fontFamily: "monospace", color: "#fff", fontWeight: 800, fontSize: "16px" }}>${livePrice?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
                 </div>
             </div>
 
-            <div style={{ position: "relative", flexGrow: 1, width: "100%", marginTop: "55px" }}>
-                <div ref={chartContainerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
+            {/* CHART CONTAINER: Absolute positioned to cover the whole parent to avoid clipping time scale */}
+            <div ref={chartContainerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }} />
 
-                {/* Event Markers Overlay (Vertical Dashed Lines) */}
-                <div id="closed-bet-line" style={{ position: "absolute", top: "0px", bottom: "30px", width: "0px", borderLeft: "1px dashed rgba(255,255,255,0.3)", pointerEvents: "none", display: "none", zIndex: 10 }}>
-                    <div style={{ position: "absolute", top: "10px", left: "6px", color: "#f59e0b", fontSize: "10px", fontWeight: "900", textTransform: "uppercase", letterSpacing: "1px", background: "rgba(10,10,10,0.8)", padding: "2px 5px", borderRadius: "2px", whiteSpace: "nowrap" }}>
-                        Betting Closes
-                    </div>
+            {/* Custom Overlay Elements - MUST BE RELATIVE TO PARENT BUT ABOVE CHART */}
+            <div id="closed-bet-line" style={{ position: "absolute", top: "0px", bottom: "25px", width: "0px", borderLeft: "1px dashed rgba(255,255,255,0.25)", pointerEvents: "none", display: "none", zIndex: 20 }}>
+                <div style={{ position: "absolute", top: "15px", left: "6px", color: "#f59e0b", fontSize: "10px", fontWeight: "900", textTransform: "uppercase", background: "rgba(10,10,10,0.8)", padding: "2px 4px", borderRadius: "2px", whiteSpace: "nowrap" }}>
+                    Betting Closes
                 </div>
-                <div id="market-end-line" style={{ position: "absolute", top: "0px", bottom: "30px", width: "0px", borderLeft: "1px dashed rgba(255,255,255,0.3)", pointerEvents: "none", display: "none", zIndex: 10 }}>
-                    <div style={{ position: "absolute", top: "40px", right: "8px", color: "#ef4444", fontSize: "10px", fontWeight: "900", textTransform: "uppercase", letterSpacing: "1px", background: "rgba(10,10,10,0.8)", padding: "2px 6px", borderRadius: "4px", whiteSpace: "nowrap", border: "1px solid rgba(239, 68, 68, 0.4)" }}>
-                        MARKET ENDS
-                    </div>
+            </div>
+            <div id="market-end-line" style={{ position: "absolute", top: "0px", bottom: "25px", width: "0px", borderLeft: "1px dashed rgba(255,255,255,0.25)", pointerEvents: "none", display: "none", zIndex: 20 }}>
+                <div style={{ position: "absolute", top: "50px", right: "6px", color: "#ff375f", fontSize: "10px", fontWeight: "900", background: "rgba(10,10,10,0.85)", padding: "2px 6px", borderRadius: "4px", whiteSpace: "nowrap", border: "1px solid rgba(255, 55, 95, 0.4)" }}>
+                    MARKET ENDS
                 </div>
             </div>
         </div>
