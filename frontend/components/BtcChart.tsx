@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { createChart, BaselineSeries, LineSeries, IChartApi, ISeriesApi, Time, ColorType } from "lightweight-charts";
+import { useEffect, useRef, useState, useMemo } from "react";
+
+interface PricePoint {
+    time: number;
+    value: number;
+}
 
 interface BtcChartProps {
-    symbol?: string; // e.g. "BTCUSDT"
+    symbol?: string;
     height?: number;
     startTime?: number;
     endTime?: number;
@@ -13,37 +17,27 @@ interface BtcChartProps {
 }
 
 export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime, bettingEndTime, strikePrice }: BtcChartProps) {
-    const chartContainerRef = useRef<HTMLDivElement>(null);
-    const chartRef = useRef<IChartApi | null>(null);
-    const seriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
-    const invisibleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [width, setWidth] = useState(0);
+    const [history, setHistory] = useState<PricePoint[]>([]);
     const [livePrice, setLivePrice] = useState<number | null>(null);
-    const priceRef = useRef<number | null>(null);
-    const lastUpdatedTimeRef = useRef<number>(0);
 
-    // Default betting time to exactly 15m before endTime if not provided
+    // Default betting time to 15m (900s) before endTime
     const actualBettingEndTime = bettingEndTime || (endTime ? endTime - 900 : undefined);
 
+    // 1. Observe Container Width for responsiveness
     useEffect(() => {
-        if (livePrice !== null) priceRef.current = livePrice;
-    }, [livePrice]);
-
-    const sanitizeData = (data: any[]) => {
-        if (!data || data.length === 0) return [];
-        const sorted = [...data].sort((a, b) => Number(a.time) - Number(b.time));
-        const unique: any[] = [];
-        const seenTimes = new Set();
-        for (let i = sorted.length - 1; i >= 0; i--) {
-            if (!seenTimes.has(sorted[i].time)) {
-                unique.unshift(sorted[i]);
-                seenTimes.add(sorted[i].time);
+        if (!containerRef.current) return;
+        const observer = new ResizeObserver((entries) => {
+            for (let entry of entries) {
+                setWidth(entry.contentRect.width);
             }
-        }
-        return unique;
-    };
+        });
+        observer.observe(containerRef.current);
+        return () => observer.disconnect();
+    }, []);
 
-    // Loop 1: Fetch History & Linearize Timeline
+    // 2. Fetch History
     useEffect(() => {
         let isMounted = true;
         async function fetchHistory() {
@@ -52,56 +46,25 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
                 const res = await fetch("/api/history", { cache: "no-store" });
                 if (!res.ok) throw new Error("History API failed");
                 const data = await res.json();
-                let historicalData = data.history || [];
+                const raw = data.history || [];
+                const currentNow = Math.floor(Date.now() / 1000);
 
-                if (!isMounted) return;
+                // Filter: only points in the fixed window [startTime, now]
+                const filtered = raw
+                    .filter((p: any) => p.time >= startTime && p.time <= Math.min(endTime, currentNow))
+                    .sort((a: any, b: any) => a.time - b.time);
 
-                const currentTimestamp = Math.floor(Date.now() / 1000);
-
-                // Filter history: within market window and NOT in the future
-                historicalData = historicalData.filter((d: any) =>
-                    d.time >= startTime && d.time <= Math.min(endTime, currentTimestamp)
-                );
-
-                const sanitized = sanitizeData(historicalData);
-
-                if (seriesRef.current && invisibleSeriesRef.current && chartRef.current) {
-                    if (sanitized.length > 0) {
-                        lastUpdatedTimeRef.current = Number(sanitized[sanitized.length - 1].time);
-                    } else {
-                        lastUpdatedTimeRef.current = startTime - 1;
-                    }
-
-                    seriesRef.current.setData(sanitized);
-
-                    // --- FORCING A LINEAR TIMESCALE ---
-                    // Populate an invisible series with points every 60s for the entire duration.
-                    const fullTimeline: any[] = [];
-                    for (let t = startTime; t <= endTime; t += 60) {
-                        fullTimeline.push({ time: t as Time, value: strikePrice || 0 });
-                    }
-                    if (fullTimeline[fullTimeline.length - 1].time !== (endTime as Time)) {
-                        fullTimeline.push({ time: endTime as Time, value: strikePrice || 0 });
-                    }
-                    invisibleSeriesRef.current.setData(fullTimeline);
-
-                    try {
-                        chartRef.current.timeScale().setVisibleRange({
-                            from: startTime as Time,
-                            to: endTime as Time
-                        });
-                    } catch (e) { }
-                }
+                if (isMounted) setHistory(filtered);
             } catch (err) {
-                console.error("Chart history error:", err);
+                console.error("SVG Chart history error:", err);
             }
         }
         fetchHistory();
-        const t = setInterval(fetchHistory, 15000);
+        const t = setInterval(fetchHistory, 10000);
         return () => { isMounted = false; clearInterval(t); };
-    }, [startTime, endTime, strikePrice]);
+    }, [startTime, endTime]);
 
-    // Loop 2: Live Price updates
+    // 3. Fetch Live
     useEffect(() => {
         let isMounted = true;
         async function fetchLive() {
@@ -113,168 +76,85 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
                 }
             } catch (k) { }
         }
-        const t = setInterval(fetchLive, 2500);
         fetchLive();
+        const t = setInterval(fetchLive, 2000);
         return () => { isMounted = false; clearInterval(t); };
     }, []);
 
-    // Loop 3: Main Chart Setup
-    useEffect(() => {
-        if (!chartContainerRef.current) return;
+    // Combine history + live price
+    const allPoints = useMemo(() => {
+        const points = [...history];
+        const now = Math.floor(Date.now() / 1000);
+        if (livePrice && (!points.length || now > points[points.length - 1].time) && startTime && now <= endTime!) {
+            points.push({ time: now, value: livePrice });
+        }
+        return points;
+    }, [history, livePrice, startTime, endTime]);
 
-        const chart = createChart(chartContainerRef.current, {
-            // Remove height here to allow absolute container to control it
-            autoSize: true,
-            layout: {
-                background: { type: ColorType.Solid, color: "#0a0a0a" },
-                textColor: "#A3A8B8",
-                fontSize: 11,
-                fontFamily: "'Inter', sans-serif",
-            },
-            grid: {
-                vertLines: { color: "rgba(255, 255, 255, 0.04)" },
-                horzLines: { color: "rgba(255, 255, 255, 0.04)" },
-            },
-            rightPriceScale: {
-                borderVisible: false,
-                scaleMargins: { top: 0.2, bottom: 0.2 },
-                autoScale: true,
-            },
-            timeScale: {
-                borderVisible: false,
-                timeVisible: true,
-                secondsVisible: false,
-                fixLeftEdge: true,
-                fixRightEdge: true,
-                lockVisibleTimeRangeOnResize: true,
-                shiftVisibleRangeOnNewBar: false,
-            },
-            crosshair: {
-                mode: 1,
-                vertLine: { color: 'rgba(255, 255, 255, 0.15)', style: 3, labelVisible: true },
-                horzLine: { color: 'rgba(255, 255, 255, 0.15)', style: 3, labelVisible: true },
-            },
-            // ABSOLUTE INTERACTION LOCKING
-            handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
-            handleScale: { mouseWheel: false, pinch: false, axisPressedMouseMove: false, axisDoubleClickReset: false },
-        });
+    // 4. Calculate Scaling
+    const scale = useMemo(() => {
+        if (!startTime || !endTime || !width) return null;
 
-        const series = chart.addSeries(BaselineSeries, {
-            baseValue: { type: 'price', price: strikePrice || 0 },
-            topLineColor: '#9cfc0d',
-            topFillColor1: 'rgba(156, 252, 13, 0.25)',
-            topFillColor2: 'rgba(156, 252, 13, 0.01)',
-            bottomLineColor: '#ff375f',
-            bottomFillColor1: 'rgba(255, 55, 95, 0.01)',
-            bottomFillColor2: 'rgba(255, 55, 95, 0.25)',
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: true,
-            autoscaleInfoProvider: (original: any) => {
-                const res = original();
-                if (strikePrice && res?.priceRange) {
-                    const mid = strikePrice;
-                    const diff = Math.max(Math.abs(res.priceRange.maxValue - mid), Math.abs(res.priceRange.minValue - mid), 30);
-                    return {
-                        priceRange: {
-                            minValue: mid - diff * 1.5,
-                            maxValue: mid + diff * 1.5,
-                        },
-                    };
-                }
-                return res;
-            }
-        });
+        // Price range calculation
+        let prices = allPoints.map(p => p.value);
+        if (strikePrice) prices.push(strikePrice);
 
-        const invisible = chart.addSeries(LineSeries, {
-            color: 'transparent',
-            lineWidth: 0,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-            autoscaleInfoProvider: () => null,
-        });
+        if (prices.length === 0) prices = [70000];
 
-        if (strikePrice) {
-            series.createPriceLine({
-                price: strikePrice,
-                color: '#00ccff',
-                lineWidth: 1,
-                lineStyle: 3,
-                axisLabelVisible: true,
-                title: 'Target'
-            });
+        const minP = Math.min(...prices);
+        const maxP = Math.max(...prices);
+        const midP = strikePrice || prices[0];
+
+        // Buffer to keep the chart centered and looking good
+        const diff = Math.max(Math.abs(maxP - midP), Math.abs(minP - midP), 40);
+        const minScale = midP - diff * 1.5;
+        const maxScale = midP + diff * 1.5;
+
+        // X-axis: 100% linear mapping of [startTime, endTime] to [0, width]
+        const getX = (t: number) => ((t - startTime) / (endTime - startTime)) * width;
+
+        // Y-axis: price to height (inverted for SVG)
+        const paddingY = 80; // Space for labels top/bottom
+        const chartAreaH = height - paddingY * 2;
+        const getY = (p: number) => height - paddingY - ((p - minScale) / (maxScale - minScale)) * chartAreaH;
+
+        return { getX, getY, minScale, maxScale, midP };
+    }, [allPoints, startTime, endTime, width, height, strikePrice]);
+
+    // 5. Generate SVG Paths
+    const paths = useMemo(() => {
+        if (!scale || allPoints.length === 0) return null;
+
+        let d = `M ${scale.getX(allPoints[0].time)} ${scale.getY(allPoints[0].value)}`;
+        for (let i = 1; i < allPoints.length; i++) {
+            d += ` L ${scale.getX(allPoints[i].time)} ${scale.getY(allPoints[i].value)}`;
         }
 
-        chartRef.current = chart;
-        seriesRef.current = series;
-        invisibleSeriesRef.current = invisible;
+        const strikeY = scale.getY(strikePrice || scale.midP);
 
-        // Force initial timeline
-        if (startTime && endTime) {
-            const initialTimeline: any[] = [];
-            for (let t = startTime; t <= endTime; t += 60) initialTimeline.push({ time: t as Time, value: strikePrice || 0 });
-            invisible.setData(initialTimeline);
-            try {
-                chart.timeScale().setVisibleRange({ from: startTime as Time, to: endTime as Time });
-            } catch (e) { }
-        }
+        // Fill areas (Green/Red)
+        const fillBaseY = strikeY;
+        let greenD = d;
+        let redD = d;
 
-        const loop = setInterval(() => {
-            if (priceRef.current && seriesRef.current && chartRef.current) {
-                const now = Math.floor(Date.now() / 1000);
-                if (endTime && now >= endTime) return;
-
-                if (now > lastUpdatedTimeRef.current) {
-                    seriesRef.current.update({ time: now as Time, value: priceRef.current });
-                    lastUpdatedTimeRef.current = now;
-                }
-
-                // Strictly enforce visible range
-                if (startTime && endTime) {
-                    const ts = chartRef.current.timeScale();
-                    try {
-                        ts.setVisibleRange({ from: startTime as Time, to: endTime as Time });
-                    } catch (e) { }
-
-                    // Reposition custom DOM overlays
-                    if (actualBettingEndTime) {
-                        const x = ts.timeToCoordinate(actualBettingEndTime as Time);
-                        const div = document.getElementById("closed-bet-line");
-                        if (div && x !== null) {
-                            div.style.left = `${x}px`;
-                            div.style.display = "block";
-                        }
-                    }
-                    if (endTime) {
-                        const x = ts.timeToCoordinate(endTime as Time);
-                        const div = document.getElementById("market-end-line");
-                        if (div && x !== null) {
-                            div.style.left = `${x}px`;
-                            div.style.display = "block";
-                        }
-                    }
-                }
-            }
-        }, 1000);
-
-        return () => {
-            clearInterval(loop);
-            chart.remove();
-            chartRef.current = null;
-            seriesRef.current = null;
-        };
-    }, [height, startTime, endTime, strikePrice, actualBettingEndTime]);
+        return { mainPath: d, strikeY, greenD, redD };
+    }, [allPoints, scale, strikePrice]);
 
     const isAbove = livePrice !== null && strikePrice !== null && livePrice > strikePrice;
 
+    if (!startTime || !endTime) return null;
+
     return (
-        <div style={{ display: "flex", flexDirection: "column", width: "100%", height: `${height}px`, overflow: "hidden", position: "relative", background: "#0a0a0a", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.05)" }}>
-            {/* High-Fidelity Header */}
+        <div ref={containerRef} style={{
+            display: "flex", flexDirection: "column", width: "100%", height: `${height}px`,
+            background: "#0a0a0a", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.05)",
+            position: "relative", overflow: "hidden", userSelect: "none"
+        }}>
+            {/* Header UI (High Fidelity) */}
             <div style={{
                 position: "absolute", top: "16px", left: "20px", right: "20px",
                 display: "flex", justifyContent: "space-between", alignItems: "center",
-                zIndex: 50, pointerEvents: "none", userSelect: "none"
+                zIndex: 50, pointerEvents: "none"
             }}>
                 <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
                     <span style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>{symbol.replace("USDT", "/USD")}</span>
@@ -293,29 +173,111 @@ export function BtcChart({ symbol = "BTCUSDT", height = 450, startTime, endTime,
 
                 <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
                     <div>
-                        <span style={{ color: "#00ccff", fontSize: "13px", fontWeight: 500 }}>Target</span> <span style={{ fontFamily: "monospace", color: "#00ccff", fontWeight: 700, fontSize: "13px" }}>${strikePrice?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span style={{ color: "#00ccff", fontSize: "13px", fontWeight: 500 }}>Target</span> <span style={{ fontFamily: "monospace", color: "#00ccff", fontWeight: 700, fontSize: "13px" }}>${strikePrice?.toLocaleString()}</span>
                     </div>
                     <div style={{ width: "1px", height: "14px", background: "rgba(255,255,255,0.15)" }} />
                     <div>
-                        <span style={{ color: "rgba(255,255,255,0.6)", fontSize: "13px", fontWeight: 500 }}>Current</span> <span style={{ fontFamily: "monospace", color: "#fff", fontWeight: 800, fontSize: "16px" }}>${livePrice?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span style={{ color: "rgba(255,255,255,0.6)", fontSize: "13px", fontWeight: 500 }}>Current</span> <span style={{ fontFamily: "monospace", color: "#fff", fontWeight: 800, fontSize: "16px" }}>${livePrice?.toLocaleString()}</span>
                     </div>
                 </div>
             </div>
 
-            {/* CHART CONTAINER: Absolute positioned to cover the whole parent to avoid clipping time scale */}
-            <div ref={chartContainerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }} />
+            {/* Main SVG Chart Area */}
+            {width > 0 && scale && (
+                <svg width={width} height={height} style={{ display: "block" }}>
+                    <defs>
+                        <linearGradient id="greenFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#9cfc0d" stopOpacity="0.3" />
+                            <stop offset="100%" stopColor="#9cfc0d" stopOpacity="0" />
+                        </linearGradient>
+                        <linearGradient id="redFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#ff375f" stopOpacity="0" />
+                            <stop offset="100%" stopColor="#ff375f" stopOpacity="0.3" />
+                        </linearGradient>
 
-            {/* Custom Overlay Elements - MUST BE RELATIVE TO PARENT BUT ABOVE CHART */}
-            <div id="closed-bet-line" style={{ position: "absolute", top: "0px", bottom: "25px", width: "0px", borderLeft: "1px dashed rgba(255,255,255,0.25)", pointerEvents: "none", display: "none", zIndex: 20 }}>
-                <div style={{ position: "absolute", top: "15px", left: "6px", color: "#f59e0b", fontSize: "10px", fontWeight: "900", textTransform: "uppercase", background: "rgba(10,10,10,0.8)", padding: "2px 4px", borderRadius: "2px", whiteSpace: "nowrap" }}>
-                    Betting Closes
+                        {/* Split Masks for Top/Bottom half coloring */}
+                        <clipPath id="clipTop">
+                            <rect x="0" y="0" width={width} height={scale.strikeY} />
+                        </clipPath>
+                        <clipPath id="clipBottom">
+                            <rect x="0" y={scale.strikeY} width={width} height={height - scale.strikeY} />
+                        </clipPath>
+                    </defs>
+
+                    {/* Grid Lines */}
+                    {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+                        const y = 80 + f * (height - 160);
+                        const price = scale.maxScale - f * (scale.maxScale - scale.minScale);
+                        return (
+                            <g key={i}>
+                                <line x1="0" y1={y} x2={width - 70} y2={y} stroke="rgba(255,255,255,0.03)" />
+                                <text x={width - 60} y={y + 4} fill="rgba(255,255,255,0.3)" fontSize="10" fontFamily="monospace">
+                                    {Math.round(price)}
+                                </text>
+                            </g>
+                        );
+                    })}
+
+                    {/* Time Labels (X Axis) */}
+                    {[startTime, Math.floor((startTime + endTime) / 2), endTime].map((t, i) => {
+                        const x = scale.getX(t);
+                        const date = new Date(t * 1000);
+                        const timeStr = `${date.getUTCHours().toString().padStart(2, '0')}:${date.getUTCMinutes().toString().padStart(2, '0')}`;
+                        return (
+                            <text key={i} x={x} y={height - 15} textAnchor={i === 0 ? "start" : i === 2 ? "end" : "middle"} fill="rgba(255,255,255,0.4)" fontSize="10" fontFamily="monospace">
+                                {timeStr}
+                            </text>
+                        );
+                    })}
+
+                    {/* Target / Strike Price Line */}
+                    <line x1="0" y1={scale.strikeY} x2={width - 70} y2={scale.strikeY} stroke="#00ccff" strokeDasharray="4 4" strokeWidth="1" />
+                    <rect x={width - 75} y={scale.strikeY - 10} width="70" height="20" rx="4" fill="#00ccff" />
+                    <text x={width - 40} y={scale.strikeY + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="800">Target</text>
+
+                    {/* Vertical Events Markers */}
+                    {actualBettingEndTime && (
+                        <g>
+                            <line x1={scale.getX(actualBettingEndTime)} y1="0" x2={scale.getX(actualBettingEndTime)} y2={height - 40} stroke="rgba(245, 158, 11, 0.3)" strokeDasharray="3 3" />
+                            <rect x={scale.getX(actualBettingEndTime) + 5} y="40" width="100" height="20" rx="2" fill="rgba(10,10,10,0.8)" />
+                            <text x={scale.getX(actualBettingEndTime) + 10} y="54" fill="#f59e0b" fontSize="9" fontWeight="900">BETTING CLOSES</text>
+                        </g>
+                    )}
+                    <line x1={scale.getX(endTime)} y1="0" x2={scale.getX(endTime)} y2={height - 40} stroke="rgba(255, 55, 95, 0.4)" strokeDasharray="3 3" />
+                    <rect x={scale.getX(endTime) - 105} y="80" width="100" height="24" rx="4" fill="rgba(10,10,10,0.85)" stroke="rgba(255, 55, 95, 0.4)" />
+                    <text x={scale.getX(endTime) - 55} y="96" textAnchor="middle" fill="#ff375f" fontSize="9" fontWeight="900">MARKET ENDS</text>
+
+                    {/* Price Line Rendering with Baseline Logic */}
+                    {paths && (
+                        <>
+                            {/* Green Half (Above Style) */}
+                            <g clipPath="url(#clipTop)">
+                                <path d={paths.mainPath} fill="none" stroke="#9cfc0d" strokeWidth="2" />
+                                <path d={`${paths.mainPath} L ${scale.getX(allPoints[allPoints.length - 1].time)} ${scale.strikeY} L ${scale.getX(allPoints[0].time)} ${scale.strikeY} Z`} fill="url(#greenFill)" stroke="none" />
+                            </g>
+                            {/* Red Half (Below Style) */}
+                            <g clipPath="url(#clipBottom)">
+                                <path d={paths.mainPath} fill="none" stroke="#ff375f" strokeWidth="2" />
+                                <path d={`${paths.mainPath} L ${scale.getX(allPoints[allPoints.length - 1].time)} ${scale.strikeY} L ${scale.getX(allPoints[0].time)} ${scale.strikeY} Z`} fill="url(#redFill)" stroke="none" />
+                            </g>
+
+                            {/* Current Price Dot */}
+                            <circle cx={scale.getX(allPoints[allPoints.length - 1].time)} cy={scale.getY(allPoints[allPoints.length - 1].value)} r="4" fill={isAbove ? "#9cfc0d" : "#ff375f"} stroke="#fff" strokeWidth="1" />
+                            <rect x={width - 75} y={scale.getY(allPoints[allPoints.length - 1].value) - 10} width="70" height="20" rx="4" fill={isAbove ? "#9cfc0d" : "#ff375f"} />
+                            <text x={width - 40} y={scale.getY(allPoints[allPoints.length - 1].value) + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="800">
+                                {livePrice?.toFixed(2)}
+                            </text>
+                        </>
+                    )}
+                </svg>
+            )}
+
+            {/* Loading State or Placeholder */}
+            {(allPoints.length === 0 || !scale) && (
+                <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", color: "rgba(255,255,255,0.2)", fontSize: "12px", textAlign: "center" }}>
+                    INITIALIZING CHART...<br />Waiting for Price Data
                 </div>
-            </div>
-            <div id="market-end-line" style={{ position: "absolute", top: "0px", bottom: "25px", width: "0px", borderLeft: "1px dashed rgba(255,255,255,0.25)", pointerEvents: "none", display: "none", zIndex: 20 }}>
-                <div style={{ position: "absolute", top: "50px", right: "6px", color: "#ff375f", fontSize: "10px", fontWeight: "900", background: "rgba(10,10,10,0.85)", padding: "2px 6px", borderRadius: "4px", whiteSpace: "nowrap", border: "1px solid rgba(255, 55, 95, 0.4)" }}>
-                    MARKET ENDS
-                </div>
-            </div>
+            )}
         </div>
     );
 }
