@@ -154,13 +154,19 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             timeScale: {
                 borderVisible: false,
                 timeVisible: true,
-                secondsVisible: true, // Crucial for real-time second ticks
+                secondsVisible: false,
+                tickMarkFormatter: (time: Time) => {
+                    const date = new Date((time as number) * 1000);
+                    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                },
             },
             crosshair: {
                 mode: 1,
                 vertLine: { color: "#6366f1", labelBackgroundColor: "#6366f1" },
                 horzLine: { color: "#6366f1", labelBackgroundColor: "#6366f1" },
             },
+            handleScroll: false,
+            handleScale: false,
         });
 
         const series = chart.addSeries(BaselineSeries, {
