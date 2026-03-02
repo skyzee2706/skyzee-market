@@ -90,31 +90,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
                     seriesRef.current.setData(historicalData);
 
-                    // Add markers for Betting Closes and Market Ended
-                    const markers: any[] = [];
-                    if (bettingEndTime) {
-                        markers.push({
-                            time: bettingEndTime as Time,
-                            position: "aboveBar",
-                            color: "#f59e0b",
-                            shape: "arrowDown",
-                            text: "Betting Closes"
-                        });
-                    }
-                    if (endTime) {
-                        markers.push({
-                            time: endTime as Time,
-                            position: "aboveBar",
-                            color: "#ef4444",
-                            shape: "arrowDown",
-                            text: "Market Ends"
-                        });
-                    }
-                    if (markers.length > 0) {
-                        (seriesRef.current as any).setMarkers(markers);
-                    }
-
-                    // Enforce strict Left-to-Right drawing by locking the Timeline
                     if (startTime && endTime) {
                         setTimeout(() => {
                             chartRef.current?.timeScale().setVisibleRange({
@@ -188,7 +163,10 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 borderVisible: false,
                 timeVisible: true,
                 secondsVisible: false,
-                shiftVisibleRangeOnNewBar: false, // PREVENTS chart from forcefully auto-scrolling right on every tick
+                shiftVisibleRangeOnNewBar: false,
+                fixLeftEdge: true,  // Absolutely lock the StartTime to the Left Edge
+                fixRightEdge: true, // Absolutely lock the EndTime to the Right Edge
+                lockVisibleTimeRangeOnResize: true,
                 tickMarkFormatter: (time: Time) => {
                     const date = new Date((time as number) * 1000);
                     // Use standard en-US so it explicitly puts AM/PM
@@ -269,7 +247,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         });
 
         // The Invisible Series provides the explicit shared global time Grid.
-        // This guarantees the True Left-to-Right drawing timeline without polluting our real Baseline data with future dates.
         if (startTime && endTime) {
             const timeData: any[] = [];
             let t = startTime;
@@ -277,10 +254,47 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 timeData.push({ time: t as Time, value: strikePrice || 0 });
                 t += 300; // Lay out 5 min rigid empty track
             }
-            if (!timeData.some(d => d.time === endTime)) {
-                timeData.push({ time: endTime as Time, value: strikePrice || 0 });
+            if (bettingEndTime) timeData.push({ time: bettingEndTime as Time, value: strikePrice || 0 });
+            timeData.push({ time: endTime as Time, value: strikePrice || 0 });
+
+            timeData.sort((a, b) => (a.time as number) - (b.time as number));
+
+            // Deduplicate to satisfy strict monotonic order
+            const uniqueTimeData = timeData.filter((item, pos, ary) => {
+                return !pos || item.time !== ary[pos - 1].time;
+            });
+
+            invisibleSeries.setData(uniqueTimeData);
+
+            // Anchor Markers into the concrete invisible layout
+            const markers: any[] = [];
+            if (bettingEndTime) {
+                markers.push({
+                    time: bettingEndTime as Time,
+                    position: "aboveBar",
+                    color: "#f59e0b",
+                    shape: "arrowDown",
+                    text: "Betting Closes"
+                });
             }
-            invisibleSeries.setData(timeData);
+            if (endTime) {
+                markers.push({
+                    time: endTime as Time,
+                    position: "aboveBar",
+                    color: "#ef4444",
+                    shape: "arrowDown",
+                    text: "Market Ends"
+                });
+            }
+            if (markers.length > 0) {
+                (invisibleSeries as any).setMarkers(markers);
+            }
+
+            // Lock visible range onto the explicit grid bounds
+            chart.timeScale().setVisibleRange({
+                from: startTime as Time,
+                to: endTime as Time
+            });
         }
 
         if (strikePrice) {
@@ -308,8 +322,8 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     return;
                 }
 
-                // Strict monotonic appending required by lightweight-charts update()
-                if (currentTimestamp > lastUpdatedTimeRef.current) {
+                // Allows equal-time inline tick updates to ensure live movement
+                if (currentTimestamp >= lastUpdatedTimeRef.current) {
                     seriesRef.current.update({
                         time: currentTimestamp as Time,
                         value: priceRef.current
