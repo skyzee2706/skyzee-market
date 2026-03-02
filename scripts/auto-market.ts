@@ -117,19 +117,48 @@ async function getOnChainBTCPrice(): Promise<bigint> {
 }
 
 /** 
- * ZERO-GAS SIMULATION: Fetch live price from Binance instead of slow testnet Oracle.
+ * ZERO-GAS SIMULATION: Fetch live price from multiple unblocked sources and find the median.
  * Formats price to 8 decimals to match Chainlink USD standard.
  */
-async function getLiveBinancePrice(retries = 3): Promise<bigint> {
+async function getLivePrice(retries = 3): Promise<bigint> {
     for (let i = 0; i < retries; i++) {
         try {
-            const response = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", { timeout: 5000 });
-            const rawPriceFloat = parseFloat(response.data.price);
-            const price8Decimals = Math.floor(rawPriceFloat * 1e8);
+            const prices: number[] = [];
+
+            // 1. Pyth Network (Hermes) - Very reliable, no API key
+            try {
+                const pyth = await axios.get("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", { timeout: 3000 });
+                // Pyth returns price with its own exponent, usually 1e8 for BTC
+                const p = Number(pyth.data.parsed[0].price.price) * Math.pow(10, pyth.data.parsed[0].price.expo);
+                if (p > 0) prices.push(p);
+            } catch (e) { }
+
+            // 2. CoinGecko - Reliable fallback
+            try {
+                const cg = await axios.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", { timeout: 3000 });
+                const p = Number(cg.data.bitcoin.usd);
+                if (p > 0) prices.push(p);
+            } catch (e) { }
+
+            // 3. Binance / MEXC (Might be blocked, fire-and-forget fallback)
+            try {
+                const mexc = await axios.get("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT", { timeout: 2000 });
+                const p = Number(mexc.data.price);
+                if (p > 0) prices.push(p);
+            } catch (e) { }
+
+            if (prices.length === 0) throw new Error("All APIs failed to return a price.");
+
+            // Calculate Median
+            prices.sort((a, b) => a - b);
+            const mid = Math.floor(prices.length / 2);
+            const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+
+            const price8Decimals = Math.floor(medianPrice * 1e8);
             return BigInt(price8Decimals);
         } catch (err) {
-            console.warn(`⚠️ Binance API failed (attempt ${i + 1}/${retries}). Retrying...`);
-            if (i === retries - 1) throw new Error("Binance API completely unreachable. Cannot resolve or create market fairly.");
+            console.warn(`⚠️ API aggregation failed (attempt ${i + 1}/${retries}). Retrying...`);
+            if (i === retries - 1) throw new Error("API completely unreachable. Cannot resolve or create market fairly.");
             await new Promise(r => setTimeout(r, 3000));
         }
     }
@@ -159,47 +188,69 @@ async function resolveMarkets() {
         const now = Math.floor(Date.now() / 1000);
         let resolvedCount = 0;
 
+        let hasActiveHourly = false;
+        let hasActiveDaily = false;
+        let hasActiveWeekly = false;
+
         for (const marketAddr of allMarkets) {
             const market = new ethers.Contract(marketAddr, MARKET_ABI, signer);
+            // Fetch state once to minimize RPC hits
             const [endTime, resolved, question] = await Promise.all([
                 market.endTime(),
                 market.resolved(),
                 market.question()
             ]);
 
+            const isHourly = question.includes(" at ");
+            const isDaily = question.includes(" by midnight ");
+            const isWeekly = question.includes(" by ") && question.includes(" UTC");
+
+            // Check if this market is currently active and ongoing
+            if (!resolved && now < Number(endTime)) {
+                if (isHourly) hasActiveHourly = true;
+                if (isDaily) hasActiveDaily = true;
+                if (isWeekly) hasActiveWeekly = true;
+                continue; // No need to process resolution for an active market
+            }
+
             if (!resolved && now >= Number(endTime)) {
                 console.log(`   ⚡ Resolving: ${question}`);
                 console.log(`      Contract: ${marketAddr}`);
                 try {
                     // ZERO-GAS SIMULATION: fetch the exact dancing price on UI right now
-                    const binancePrice = await getLiveBinancePrice();
-                    console.log(`      📡 Injecting Live Binance Price: $${(Number(binancePrice) / 1e8).toLocaleString()}`);
+                    const livePrice = await getLivePrice();
+                    console.log(`      📡 Injecting Live Price: $${(Number(livePrice) / 1e8).toLocaleString()}`);
 
-                    const tx = await market.resolveWithCustomPrice(binancePrice);
+                    const tx = await market.resolveWithCustomPrice(livePrice);
                     const receipt = await tx.wait();
                     console.log(`      ✅ Resolved in block ${receipt.blockNumber}`);
                     resolvedCount++;
 
-                    // Auto-recreate based on original market question
-                    if (question.includes(" at ")) {
-                        console.log(`      🔄 Auto-recreating Hourly market...`);
-                        await runHourly();
-                    } else if (question.includes(" by midnight ")) {
-                        console.log(`      🔄 Auto-recreating Daily market...`);
-                        await runDaily();
-                    } else if (question.includes(" by ") && question.includes(" UTC")) {
-                        // Catch-all for weekly or similar formatting
-                        console.log(`      🔄 Auto-recreating Weekly market...`);
-                        await runWeekly();
-                    }
                 } catch (rErr: any) {
-                    console.error(`      ❌ Failed to resolve:`, rErr.reason || rErr.message);
+                    console.error(`      ❌ Failed to resolve ${marketAddr}:`, rErr.reason || rErr.message || rErr);
+                    // Do not break the loop, continue to the next market
                 }
             }
         }
+
         if (resolvedCount === 0) console.log("   No markets needed resolution at this time.");
+
+        // Guarantee that there is always at least 1 active market of each type
+        if (!hasActiveHourly) {
+            console.log(`      🔄 Missing active Hourly market. Auto-creating...`);
+            await runHourly();
+        }
+        if (!hasActiveDaily) {
+            console.log(`      🔄 Missing active Daily market. Auto-creating...`);
+            await runDaily();
+        }
+        if (!hasActiveWeekly) {
+            console.log(`      🔄 Missing active Weekly market. Auto-creating...`);
+            await runWeekly();
+        }
+
     } catch (err) {
-        console.error("❌ Auto-resolve check failed:", err);
+        console.error("❌ Auto-resolve sweep failed:", err);
     }
 }
 
@@ -208,7 +259,7 @@ async function resolveMarkets() {
 async function runHourly() {
     console.log(`\n⏰ [HOURLY] ${new Date().toUTCString()}`);
     try {
-        const price = await getLiveBinancePrice(); // Use Binance for baseline so question matches UI perfectly
+        const price = await getLivePrice(); // Use exact frontend API for baseline so question matches UI perfectly
         const endTime = nextHourUTC();
         const bettingEndTime = endTime - 15 * 60;  // close 15 mins early
         const label = formatHourUTC(endTime);
@@ -223,7 +274,7 @@ async function runHourly() {
 async function runDaily() {
     console.log(`\n📅 [DAILY] ${new Date().toUTCString()}`);
     try {
-        const price = await getLiveBinancePrice(); // Use Binance
+        const price = await getLivePrice(); // Use exact frontend API
         const endTime = nextMidnightUTC();
         const bettingEndTime = endTime - 12 * 60 * 60; // close 12 hrs early
         const label = formatDateUTC(endTime);
@@ -238,7 +289,7 @@ async function runDaily() {
 async function runWeekly() {
     console.log(`\n📅 [WEEKLY] ${new Date().toUTCString()}`);
     try {
-        const price = await getLiveBinancePrice(); // Use Binance
+        const price = await getLivePrice(); // Use exact frontend API
         const endTime = nextWeekUTC();
         const bettingEndTime = endTime - 3 * 24 * 60 * 60; // close 3 days early
         const label = formatDateUTC(endTime);
@@ -263,15 +314,17 @@ async function main() {
     console.log("");
 
     // Sweep on startup to catch missed deadlines during downtime
-    // This will inherently trigger 'runHourly', 'runDaily', 'runWeekly' via the recreation logic
     console.log("\n▶️  Running initial resolution sweep on startup...");
     await resolveMarkets();
 
-    // ── Cron: Auto-Resolve every 1 minute
-    cron.schedule("* * * * *", resolveMarkets);
-    console.log("\n🔄 Auto-resolve scheduled : * * * * * (Every 1 min)");
+    // ── Loop: Auto-Resolve safely overlapping prevention
+    console.log("\n🔄 Auto-resolve scheduled: Every 30 seconds");
 
-    console.log("\n✅ Scheduler is now running. Press Ctrl+C to stop.\n");
+    // Instead of node-cron, use a self-invoking loop to prevent overlap if a sweep takes >30s
+    while (true) {
+        await new Promise(res => setTimeout(res, 30_000));
+        await resolveMarkets();
+    }
 }
 
 main().catch((err) => {

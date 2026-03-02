@@ -25,17 +25,19 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
         async function fetchHistoryAndLive() {
             try {
-                let url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=60`;
-                let intervalSec = 60;
+                let url = `https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1`;
+                let intervalSec = 300; // 5m default for 1 day
 
                 if (startTime && endTime) {
                     const duration = endTime - startTime;
-                    let intervalStr = "1m";
-                    if (duration > 3 * 86400) { intervalStr = "1h"; intervalSec = 3600; }
-                    else if (duration > 86400) { intervalStr = "15m"; intervalSec = 900; }
-                    else if (duration > 3600) { intervalStr = "5m"; intervalSec = 300; }
+                    let days = "1";
+                    if (duration > 3 * 86400) { days = "7"; intervalSec = 3600; }
+                    else if (duration > 86400) { days = "3"; intervalSec = 3600; }
 
-                    url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${intervalStr}&startTime=${startTime * 1000}&limit=1000`;
+                    // CoinGecko auto-adjusts granularity based on 'days', but we want historical span covering our start time
+                    // Math.ceil converts duration to days.
+                    const daysSpan = Math.ceil((Date.now() / 1000 - startTime) / 86400);
+                    url = `https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${Math.max(1, daysSpan)}`;
                 }
 
                 const res = await fetch(url);
@@ -43,10 +45,15 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
                 if (!isMounted) return;
 
-                const historicalData: any[] = data.map((k: any) => ({
-                    time: Math.floor(k[0] / 1000) as Time,
-                    value: parseFloat(k[4]) // close price
+                let historicalData: any[] = data.prices.map((p: any) => ({
+                    time: Math.floor(p[0] / 1000) as Time,
+                    value: p[1]
                 }));
+
+                // Filter out history that is way before our start time (optional but clean)
+                if (startTime) {
+                    historicalData = historicalData.filter(d => (d.time as number) >= startTime);
+                }
 
                 // Pad future whitespace to lock the X-axis frame up to endTime
                 if (endTime && historicalData.length > 0) {
@@ -105,23 +112,25 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     }
                 }
 
-                if (data.length > 0) {
-                    setLivePrice(parseFloat(data[data.length - 1][4]));
+                if (data.prices && data.prices.length > 0) {
+                    setLivePrice(data.prices[data.prices.length - 1][1]);
                 }
             } catch (err) {
-                console.error("Binance history error:", err);
+                console.error("CoinGecko history error:", err);
             }
         }
 
         async function fetchLive() {
             try {
-                const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
+                // Primary Live Price: Pyth Network (Lightning fast, reliable)
+                const res = await fetch("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43");
                 const data = await res.json();
-                if (isMounted && data.price) {
-                    setLivePrice(parseFloat(data.price));
+                if (isMounted && data.parsed && data.parsed.length > 0) {
+                    const pythPrice = Number(data.parsed[0].price.price) * Math.pow(10, data.parsed[0].price.expo);
+                    setLivePrice(pythPrice);
                 }
             } catch (err) {
-                console.error("Binance API error:", err);
+                console.error("Pyth API error:", err);
             }
         }
 
@@ -163,15 +172,18 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 borderVisible: false,
                 timeVisible: true,
                 secondsVisible: false,
+                fixLeftEdge: true,
+                fixRightEdge: true,
                 tickMarkFormatter: (time: Time) => {
                     const date = new Date((time as number) * 1000);
-                    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                    // Use standard en-US so it explicitly puts AM/PM
+                    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
                 },
             },
             crosshair: {
                 mode: 1,
-                vertLine: { color: "#6366f1", labelBackgroundColor: "#6366f1" },
-                horzLine: { color: "#6366f1", labelBackgroundColor: "#6366f1" },
+                vertLine: { color: "#6366f1", labelBackgroundColor: "#6366f1", style: 3 },
+                horzLine: { color: "#6366f1", labelBackgroundColor: "#6366f1", style: 3 },
             },
             handleScroll: false,
             handleScale: false,
@@ -196,11 +208,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         if (strikePrice) {
             series.createPriceLine({
                 price: strikePrice,
-                color: '#f8fafc',
-                lineWidth: 1,
-                lineStyle: 1, // Dotted
+                color: '#06b6d4', // Cyan for Target line
+                lineWidth: 2,
+                lineStyle: 3, // 3 = Dashed, 2 = Dotted
                 axisLabelVisible: true,
-                title: 'Strike',
+                title: 'Target',
             });
         }
 
@@ -211,12 +223,26 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         const interval = setInterval(() => {
             if (priceRef.current && seriesRef.current) {
                 const now = Math.floor(Date.now() / 1000) as Time;
+
+                // Stop injecting live updates if the market is definitively ended (prevents X-axis skewing into whitespace)
+                if (endTime && now > endTime) {
+                    return;
+                }
+
                 seriesRef.current.update({
                     time: now,
                     value: priceRef.current
                 });
-                // The library natively auto-scrolls horizontally if timeVisible: true
-                // and vertically scales automatically. No continuous fitContent() needed!
+
+                // Sync the vertical "Closed Bet" line position
+                if (bettingEndTime) {
+                    const xPos = chart.timeScale().timeToCoordinate(bettingEndTime as Time);
+                    const lineDiv = document.getElementById("closed-bet-line");
+                    if (lineDiv && xPos !== null) {
+                        lineDiv.style.left = `${xPos}px`;
+                        lineDiv.style.display = "block";
+                    }
+                }
             }
         }, 1000);
 
@@ -267,7 +293,37 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     )}
                 </div>
             </div>
-            <div ref={chartContainerRef} style={{ width: "100%", paddingTop: "70px" }} />
+            <div style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden" }}>
+                <div ref={chartContainerRef} style={{ width: "100%", paddingTop: "70px" }} />
+
+                {/* Vertical Closed Bet Line Overlay */}
+                <div
+                    id="closed-bet-line"
+                    style={{
+                        position: "absolute",
+                        top: "70px",
+                        bottom: "30px", // leave space for timeline
+                        width: "1px",
+                        borderLeft: "2px dashed #4b5563",
+                        pointerEvents: "none",
+                        display: "none",
+                        zIndex: 5
+                    }}
+                >
+                    <div style={{
+                        position: "absolute",
+                        top: "0",
+                        left: "4px",
+                        color: "#9ca3af",
+                        fontSize: "10px",
+                        fontWeight: "600",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.5px"
+                    }}>
+                        Betting Closed
+                    </div>
+                </div>
+            </div>
         </div>
     );
 }
