@@ -5,8 +5,13 @@ import { formatUnits } from "viem";
 import { useAccount } from "wagmi";
 import { useMarket, useUserPosition } from "@/hooks/useMarket";
 import { BetPanel } from "@/components/BetPanel";
-import { BtcChart } from "@/components/BtcChart";
 import Link from "next/link";
+import dynamic from "next/dynamic";
+
+const BtcChart = dynamic(() => import("@/components/BtcChart").then(mod => mod.BtcChart), {
+    ssr: false,
+    loading: () => <div style={{ height: "450px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)" }}>Loading Chart...</div>
+});
 
 function useNow() {
     const [now, setNow] = useState<number | null>(null);

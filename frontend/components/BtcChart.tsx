@@ -16,20 +16,27 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+    const invisibleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
     const [livePrice, setLivePrice] = useState<number | null>(null);
+    const priceRef = useRef<number | null>(null);
+    const lastUpdatedTimeRef = useRef<number>(0);
 
-    // ZERO-GAS SIMULATION: Fetch historical and live data
+    // Sync livePrice to ref for chart updates without re-triggering effects
+    useEffect(() => {
+        if (livePrice !== null) {
+            priceRef.current = livePrice;
+        }
+    }, [livePrice]);
+
+    // Loop 1: Fetch History (CoinGecko -> MEXC)
     useEffect(() => {
         let isMounted = true;
-
-        async function fetchHistoryAndLive() {
+        async function fetchHistory() {
             if (!startTime || !endTime) return;
-
             try {
                 let historicalData: any[] = [];
-
-                // 1. Try CoinGecko First
+                // 1. CoinGecko
                 try {
                     const daysSpan = Math.ceil((Date.now() / 1000 - startTime) / 86400);
                     const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${Math.max(1, daysSpan)}`);
@@ -39,38 +46,29 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                             time: Math.floor(p[0] / 1000) as Time,
                             value: p[1]
                         }));
-                    } else {
-                        throw new Error("CoinGecko non-200 response");
-                    }
+                    } else { throw new Error("CG fall"); }
                 } catch (e) {
-                    console.warn("CoinGecko History blocked/failed, falling back to MEXC Klines...");
-                    // 2. Fallback to MEXC History
+                    // 2. MEXC Fallback
                     try {
-                        const mexcInterval = "5m";
-                        const mexcStartTime = `&startTime=${startTime * 1000}`;
-                        const mexcRes = await fetch(`https://api.mexc.com/api/v3/klines?symbol=${symbol}&interval=${mexcInterval}${mexcStartTime}&limit=1000`);
-                        if (mexcRes.ok) {
-                            const data = await mexcRes.json();
+                        const res = await fetch(`https://api.mexc.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${startTime * 1000}&limit=1000`);
+                        if (res.ok) {
+                            const data = await res.json();
                             historicalData = data.map((k: any) => ({
-                                time: Math.floor(k[0] / 1000) as Time, // OpenTime
-                                value: Number(k[1])                    // OpenPrice
+                                time: Math.floor(k[0] / 1000) as Time,
+                                value: Number(k[1])
                             }));
                         }
-                    } catch (mexcErr) {
-                        console.error("All History APIs failed to load, chart will start blank.");
-                    }
+                    } catch (mErr) { console.error("History fallback failed"); }
                 }
 
                 if (!isMounted) return;
 
-                // Sync and draw historical data
-                if (startTime) {
-                    historicalData = historicalData.filter(d => (d.time as number) >= startTime);
-                    const nowSec = Math.floor(Date.now() / 1000);
-                    historicalData = historicalData.filter(d => (d.time as number) <= nowSec);
-                }
+                // Filter to market window
+                historicalData = historicalData.filter(d => (d.time as number) >= startTime);
+                const nowSec = Math.floor(Date.now() / 1000);
+                historicalData = historicalData.filter(d => (d.time as number) <= nowSec);
 
-                if (isMounted && seriesRef.current) {
+                if (seriesRef.current) {
                     if (historicalData.length > 0) {
                         lastUpdatedTimeRef.current = historicalData[historicalData.length - 1].time as number;
                     } else {
@@ -78,69 +76,40 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     }
                     seriesRef.current.setData(historicalData);
                 }
-            } catch (err) {
-                console.error("fetchHistoryAndLive wrapper error:", err);
-            }
+            } catch (err) { console.error(err); }
         }
-
-        fetchHistoryAndLive();
-
-        return () => {
-            isMounted = false;
-        };
+        fetchHistory();
+        return () => { isMounted = false; };
     }, [startTime, endTime, symbol]);
 
-    // Live Price Fetcher (Centralized API)
+    // Loop 2: Fetch Live Price
     useEffect(() => {
         let isMounted = true;
-
         async function fetchLive() {
             try {
                 const res = await fetch("/api/price", { cache: "no-store" });
                 if (res.ok && isMounted) {
                     const data = await res.json();
-                    if (data.price && data.price > 0) {
-                        setLivePrice(data.price);
-                    }
+                    if (data.price > 0) setLivePrice(data.price);
                 }
-            } catch (err) {
-                console.error("Live fetch wrapper error:", err);
-            }
+            } catch (k) { }
         }
-
-        const interval = setInterval(fetchLive, 1000);
-        return () => {
-            isMounted = false;
-            clearInterval(interval);
-        };
+        const t = setInterval(fetchLive, 1000);
+        return () => { isMounted = false; clearInterval(t); };
     }, []);
 
-    const priceRef = useRef<number | null>(null);
-    const lastUpdatedTimeRef = useRef<number>(0);
-
-    // Keep the ref updated with the latest price without causing the chart to rebuild
-    useEffect(() => {
-        if (livePrice !== null) {
-            priceRef.current = livePrice;
-        }
-    }, [livePrice]);
-
+    // Loop 3: Main Chart Setup
     useEffect(() => {
         if (!chartContainerRef.current) return;
 
         const chart = createChart(chartContainerRef.current, {
             height,
-            layout: {
-                background: { color: "transparent" },
-                textColor: "#A3A8B8",
-            },
+            layout: { background: { color: "transparent" }, textColor: "#A3A8B8" },
             grid: {
                 vertLines: { color: "rgba(255, 255, 255, 0.05)" },
                 horzLines: { color: "rgba(255, 255, 255, 0.05)" },
             },
-            rightPriceScale: {
-                borderVisible: false,
-            },
+            rightPriceScale: { borderVisible: false },
             timeScale: {
                 borderVisible: false,
                 timeVisible: true,
@@ -150,15 +119,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 fixRightEdge: true,
                 lockVisibleTimeRangeOnResize: true,
                 tickMarkFormatter: (time: Time) => {
-                    const date = new Date((time as number) * 1000);
-                    return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                    const d = new Date((time as number) * 1000);
+                    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
                 },
             },
-            crosshair: {
-                mode: 1,
-                vertLine: { color: "#6366f1", labelBackgroundColor: "#6366f1", style: 3 },
-                horzLine: { color: "#6366f1", labelBackgroundColor: "#6366f1", style: 3 },
-            },
+            crosshair: { mode: 1 },
             handleScroll: false,
             handleScale: false,
         });
@@ -172,141 +137,86 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             bottomFillColor1: 'rgba(239, 68, 68, 0.05)',
             bottomFillColor2: 'rgba(239, 68, 68, 0.28)',
             lineWidth: 2,
-            priceFormat: {
-                type: "price",
-                precision: 2,
-                minMove: 0.01,
-            },
             autoscaleInfoProvider: (original: any) => {
                 const res = original();
-                let currentMin = strikePrice || 0;
-                let currentMax = strikePrice || 0;
-
-                if (res !== null && res.priceRange !== null) {
-                    currentMin = res.priceRange.minValue;
-                    currentMax = res.priceRange.maxValue;
+                let min = strikePrice || 0;
+                let max = strikePrice || 0;
+                if (res?.priceRange) {
+                    min = res.priceRange.minValue;
+                    max = res.priceRange.maxValue;
                 }
-
                 if (priceRef.current !== null) {
-                    currentMin = Math.min(currentMin, priceRef.current);
-                    currentMax = Math.max(currentMax, priceRef.current);
+                    min = Math.min(min, priceRef.current);
+                    max = Math.max(max, priceRef.current);
                 }
-
                 if (strikePrice) {
-                    const maxDiff = Math.max(
-                        Math.abs(currentMax - strikePrice),
-                        Math.abs(currentMin - strikePrice)
-                    );
-                    const padding = maxDiff * 0.15;
-
-                    if (maxDiff === 0) {
-                        return { priceRange: { minValue: strikePrice - 100, maxValue: strikePrice + 100 }, margins: { above: 0, below: 0 } };
-                    }
-                    return {
-                        priceRange: {
-                            minValue: strikePrice - maxDiff - padding,
-                            maxValue: strikePrice + maxDiff + padding,
-                        },
-                        margins: { above: 0, below: 0 }
-                    };
+                    const diff = Math.max(Math.abs(max - strikePrice), Math.abs(min - strikePrice));
+                    const pad = diff * 0.15;
+                    if (diff === 0) return { priceRange: { minValue: strikePrice - 100, maxValue: strikePrice + 100 }, margins: { above: 0, below: 0 } };
+                    return { priceRange: { minValue: strikePrice - diff - pad, maxValue: strikePrice + diff + pad }, margins: { above: 0, below: 0 } };
                 }
                 return res;
-            },
+            }
         });
 
-        const invisibleSeries = chart.addSeries(LineSeries, {
+        const invisible = chart.addSeries(LineSeries, {
             color: 'transparent',
             lineWidth: 1,
             crosshairMarkerVisible: false,
-            priceLineVisible: false,
             lastValueVisible: false,
+            priceLineVisible: false,
             autoscaleInfoProvider: () => null,
         });
 
         if (startTime && endTime) {
-            const timeData: any[] = [];
+            const grid: any[] = [];
             let t = startTime;
             while (t <= endTime) {
-                timeData.push({ time: t as Time, value: strikePrice || 0 });
+                grid.push({ time: t as Time, value: strikePrice || 0 });
                 t += 300;
             }
-            if (bettingEndTime) timeData.push({ time: bettingEndTime as Time, value: strikePrice || 0 });
-            timeData.push({ time: endTime as Time, value: strikePrice || 0 });
+            if (bettingEndTime) grid.push({ time: bettingEndTime as Time, value: strikePrice || 0 });
+            grid.push({ time: endTime as Time, value: strikePrice || 0 });
+            grid.sort((a, b) => (a.time as number) - (b.time as number));
+            const unique = grid.filter((v, i, a) => !i || v.time !== a[i - 1].time);
+            invisible.setData(unique);
 
-            timeData.sort((a, b) => (a.time as number) - (b.time as number));
-            const uniqueTimeData = timeData.filter((item, pos, ary) => {
-                return !pos || item.time !== ary[pos - 1].time;
-            });
+            const m: any[] = [];
+            if (bettingEndTime) m.push({ time: bettingEndTime as Time, position: "aboveBar", color: "#f59e0b", shape: "arrowDown", text: "Betting Closes" });
+            if (endTime) m.push({ time: endTime as Time, position: "aboveBar", color: "#ef4444", shape: "arrowDown", text: "Market Ends" });
+            if (m.length > 0) (invisible as any).setMarkers(m);
 
-            invisibleSeries.setData(uniqueTimeData);
-
-            const markers: any[] = [];
-            if (bettingEndTime) {
-                markers.push({
-                    time: bettingEndTime as Time,
-                    position: "aboveBar",
-                    color: "#f59e0b",
-                    shape: "arrowDown",
-                    text: "Betting Closes"
-                });
-            }
-            if (endTime) {
-                markers.push({
-                    time: endTime as Time,
-                    position: "aboveBar",
-                    color: "#ef4444",
-                    shape: "arrowDown",
-                    text: "Market Ends"
-                });
-            }
-            if (markers.length > 0) {
-                (invisibleSeries as any).setMarkers(markers);
-            }
-
-            chart.timeScale().setVisibleRange({
-                from: startTime as Time,
-                to: endTime as Time
-            });
+            chart.timeScale().setVisibleRange({ from: startTime as Time, to: endTime as Time });
         }
 
         if (strikePrice) {
-            series.createPriceLine({
-                price: strikePrice,
-                color: '#06b6d4',
-                lineWidth: 2,
-                lineStyle: 3,
-                axisLabelVisible: true,
-                title: 'Target',
-            });
+            series.createPriceLine({ price: strikePrice, color: '#06b6d4', lineWidth: 2, lineStyle: 3, axisLabelVisible: true, title: 'Target' });
         }
 
         chartRef.current = chart;
         seriesRef.current = series;
+        invisibleSeriesRef.current = invisible;
 
-        const updateInterval = setInterval(() => {
+        const loop = setInterval(() => {
             if (priceRef.current && seriesRef.current) {
-                const currentTimestamp = Math.floor(Date.now() / 1000);
-                if (endTime && currentTimestamp > endTime) return;
-
-                if (currentTimestamp >= lastUpdatedTimeRef.current) {
-                    seriesRef.current.update({
-                        time: currentTimestamp as Time,
-                        value: priceRef.current
-                    });
-                    lastUpdatedTimeRef.current = currentTimestamp;
+                const now = Math.floor(Date.now() / 1000);
+                if (endTime && now > endTime) return;
+                if (now >= lastUpdatedTimeRef.current) {
+                    seriesRef.current.update({ time: now as Time, value: priceRef.current });
+                    lastUpdatedTimeRef.current = now;
                 }
-
                 if (bettingEndTime && chartRef.current) {
-                    const xPos = chartRef.current.timeScale().timeToCoordinate(bettingEndTime as Time);
-                    const lineDiv = document.getElementById("closed-bet-line");
-                    if (lineDiv && xPos !== null) {
-                        lineDiv.style.left = `${xPos}px`;
-                        lineDiv.style.display = "block";
+                    const x = chartRef.current.timeScale().timeToCoordinate(bettingEndTime as Time);
+                    const div = document.getElementById("closed-bet-line");
+                    if (div && x !== null) {
+                        div.style.left = `${x}px`;
+                        div.style.display = "block";
                     }
                 }
             }
         }, 1000);
 
+        // Responsive handling
         const handleResize = () => {
             if (chartContainerRef.current && chartRef.current) {
                 chartRef.current.applyOptions({
@@ -315,82 +225,36 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 });
             }
         };
-
-        const resizeObserver = new ResizeObserver(() => {
-            handleResize();
-        });
-
-        if (chartContainerRef.current) {
-            resizeObserver.observe(chartContainerRef.current);
-        }
+        const obs = new ResizeObserver(handleResize);
+        obs.observe(chartContainerRef.current);
 
         return () => {
-            clearInterval(updateInterval);
-            resizeObserver.disconnect();
+            clearInterval(loop);
+            obs.disconnect();
             chart.remove();
+            chartRef.current = null;
+            seriesRef.current = null;
         };
     }, [height, startTime, endTime, symbol, strikePrice, bettingEndTime]);
 
     return (
         <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "hidden" }}>
-            <div style={{
-                padding: "16px 16px 8px 16px",
-                display: "flex",
-                flexDirection: "column",
-                zIndex: 10,
-                flexShrink: 0
-            }}>
+            <div style={{ padding: "16px 16px 8px 16px", display: "flex", flexDirection: "column", zIndex: 10, flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                    <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-muted)" }}>
-                        {symbol.replace("USDT", " / USD")}
-                    </span>
-                    <span style={{ fontSize: "11px", background: "rgba(99,102,241,0.15)", color: "#6366f1", padding: "2px 6px", borderRadius: "12px", border: "1px solid rgba(99,102,241,0.3)" }}>
-                        Oracle Live
-                    </span>
+                    <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-muted)" }}>{symbol.replace("USDT", " / USD")}</span>
+                    <span style={{ fontSize: "11px", background: "rgba(99,102,241,0.15)", color: "#6366f1", padding: "2px 6px", borderRadius: "12px", border: "1px solid rgba(99,102,241,0.3)" }}>Oracle Live</span>
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
                     <span style={{ fontSize: "28px", fontWeight: 800, color: "var(--text-primary)", fontFamily: "monospace" }}>
                         {livePrice ? `$${livePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Loading..."}
                     </span>
-                    {livePrice && (
-                        <span style={{
-                            width: "8px", height: "8px", borderRadius: "50%",
-                            background: "#6366f1",
-                            animation: "pulse 1.5s infinite",
-                            boxShadow: "0 0 10px rgba(99,102,241,0.5)"
-                        }} />
-                    )}
+                    {livePrice && <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#6366f1", animation: "pulse 1.5s infinite", boxShadow: "0 0 10px rgba(99,102,241,0.5)" }} />}
                 </div>
             </div>
-
             <div style={{ position: "relative", flexGrow: 1, width: "100%" }}>
                 <div ref={chartContainerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
-                <div
-                    id="closed-bet-line"
-                    style={{
-                        position: "absolute",
-                        top: "0px",
-                        bottom: "26px",
-                        width: "1px",
-                        borderLeft: "2px dashed #4b5563",
-                        pointerEvents: "none",
-                        display: "none",
-                        zIndex: 5
-                    }}
-                >
-                    <div style={{
-                        position: "absolute",
-                        top: "10px",
-                        left: "4px",
-                        color: "var(--text-muted)",
-                        fontSize: "11px",
-                        fontWeight: "600",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.5px",
-                        background: "var(--bg-card)",
-                        padding: "2px 4px",
-                        borderRadius: "4px"
-                    }}>
+                <div id="closed-bet-line" style={{ position: "absolute", top: "0px", bottom: "26px", width: "1px", borderLeft: "2px dashed #4b5563", pointerEvents: "none", display: "none", zIndex: 5 }}>
+                    <div style={{ position: "absolute", top: "10px", left: "4px", color: "var(--text-muted)", fontSize: "11px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-card)", padding: "2px 4px", borderRadius: "4px" }}>
                         Betting Closed
                     </div>
                 </div>
