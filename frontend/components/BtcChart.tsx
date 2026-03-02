@@ -24,19 +24,15 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         let isMounted = true;
 
         async function fetchHistoryAndLive() {
+            if (!startTime || !endTime) return;
+
             try {
                 let historicalData: any[] = [];
                 let intervalSec = 300; // 5m default
 
-                if (startTime && endTime) {
-                    const duration = endTime - startTime;
-                    if (duration > 3 * 86400) { intervalSec = 3600; }
-                    else if (duration > 86400) { intervalSec = 3600; }
-                }
-
                 // 1. Try CoinGecko First
                 try {
-                    const daysSpan = startTime ? Math.ceil((Date.now() / 1000 - startTime) / 86400) : 1;
+                    const daysSpan = Math.ceil((Date.now() / 1000 - startTime) / 86400);
                     const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${Math.max(1, daysSpan)}`);
                     if (cgRes.ok) {
                         const data = await cgRes.json();
@@ -44,9 +40,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                             time: Math.floor(p[0] / 1000) as Time,
                             value: p[1]
                         }));
-                        if (data.prices && data.prices.length > 0) {
-                            setLivePrice(data.prices[data.prices.length - 1][1]);
-                        }
                     } else {
                         throw new Error("CoinGecko non-200 response");
                     }
@@ -54,18 +47,15 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     console.warn("CoinGecko History blocked/failed, falling back to MEXC Klines...");
                     // 2. Fallback to MEXC History
                     try {
-                        const mexcInterval = intervalSec >= 3600 ? "60m" : "5m";
-                        const mexcStartTime = startTime ? `&startTime=${startTime * 1000}` : "";
-                        const mexcRes = await fetch(`https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=${mexcInterval}${mexcStartTime}&limit=1000`);
+                        const mexcInterval = "5m";
+                        const mexcStartTime = `&startTime=${startTime * 1000}`;
+                        const mexcRes = await fetch(`https://api.mexc.com/api/v3/klines?symbol=${symbol}&interval=${mexcInterval}${mexcStartTime}&limit=1000`);
                         if (mexcRes.ok) {
                             const data = await mexcRes.json();
                             historicalData = data.map((k: any) => ({
                                 time: Math.floor(k[0] / 1000) as Time, // OpenTime
                                 value: Number(k[1])                    // OpenPrice
                             }));
-                            if (historicalData.length > 0) {
-                                setLivePrice(historicalData[historicalData.length - 1].value);
-                            }
                         }
                     } catch (mexcErr) {
                         console.error("All History APIs failed to load, chart will start blank.");
@@ -74,9 +64,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
                 if (!isMounted) return;
 
+                // Sync and draw historical data
                 if (startTime) {
                     historicalData = historicalData.filter(d => (d.time as number) >= startTime);
-                    // Filter out future CoinGecko artifacts if any exist so our live monotonic `update()` doesn't get rejected
                     const nowSec = Math.floor(Date.now() / 1000);
                     historicalData = historicalData.filter(d => (d.time as number) <= nowSec);
                 }
@@ -84,35 +74,31 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 if (isMounted && seriesRef.current) {
                     if (historicalData.length > 0) {
                         lastUpdatedTimeRef.current = historicalData[historicalData.length - 1].time as number;
-                    } else if (startTime) {
-                        lastUpdatedTimeRef.current = startTime - 1; // Start strictly before first tick
-                    }
-
-                    seriesRef.current.setData(historicalData);
-
-                    if (startTime && endTime) {
-                        setTimeout(() => {
-                            chartRef.current?.timeScale().setVisibleRange({
-                                from: startTime as Time,
-                                to: endTime as Time
-                            });
-                        }, 50);
                     } else {
-                        chartRef.current?.timeScale().fitContent();
+                        lastUpdatedTimeRef.current = startTime - 1;
                     }
+                    seriesRef.current.setData(historicalData);
                 }
             } catch (err) {
                 console.error("fetchHistoryAndLive wrapper error:", err);
             }
         }
 
+        fetchHistoryAndLive();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [startTime, endTime, symbol]);
+
+    // Live Price Fetcher (Centralized API)
+    useEffect(() => {
+        let isMounted = true;
+
         async function fetchLive() {
             try {
-                // To guarantee 100% price synchronization between the Live Frontend Chart, the text UI, 
-                // and the backend PM2 resolve bot, the frontend now queries an internal server-side Next.js API route.
-                // This completely prevents browser AdBlockers or CORS errors from skewing the median price.
                 const res = await fetch("/api/price", { cache: "no-store" });
-                if (res.ok) {
+                if (res.ok && isMounted) {
                     const data = await res.json();
                     if (data.price && data.price > 0) {
                         setLivePrice(data.price);
@@ -123,10 +109,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             }
         }
 
-        fetchHistoryAndLive();
-        // Faster polling interval to make the chart feel highly responsive (1s)
         const interval = setInterval(fetchLive, 1000);
-
         return () => {
             isMounted = false;
             clearInterval(interval);
@@ -312,17 +295,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         seriesRef.current = series;
 
         // Tick every 1 second continuously matching real time updates
-        const interval = setInterval(() => {
+        const updateInterval = setInterval(() => {
             if (priceRef.current && seriesRef.current) {
                 const currentTimestamp = Math.floor(Date.now() / 1000);
-                const now = currentTimestamp as Time;
 
-                // Stop injecting live updates if the market is definitively ended (prevents X-axis skewing into whitespace)
-                if (endTime && currentTimestamp > endTime) {
-                    return;
-                }
+                // Stop updates if market ended
+                if (endTime && currentTimestamp > endTime) return;
 
-                // Allows equal-time inline tick updates to ensure live movement
+                // Strict monotonic update
                 if (currentTimestamp >= lastUpdatedTimeRef.current) {
                     seriesRef.current.update({
                         time: currentTimestamp as Time,
@@ -331,7 +311,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     lastUpdatedTimeRef.current = currentTimestamp;
                 }
 
-                // Sync the vertical "Closed Bet" line position
+                // Sync vertical line
                 if (bettingEndTime) {
                     const xPos = chart.timeScale().timeToCoordinate(bettingEndTime as Time);
                     const lineDiv = document.getElementById("closed-bet-line");
@@ -342,6 +322,16 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 }
             }
         }, 1000);
+
+        // SYNC TIMELINE EDGE (Enforce left-to-right on data load)
+        if (startTime && endTime) {
+            setTimeout(() => {
+                chart.timeScale().setVisibleRange({
+                    from: startTime as Time,
+                    to: endTime as Time
+                });
+            }, 100);
+        }
 
         const handleResize = () => {
             if (chartContainerRef.current) {
@@ -361,11 +351,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         }
 
         return () => {
-            clearInterval(interval);
+            clearInterval(updateInterval);
             resizeObserver.disconnect();
             chart.remove();
         };
-    }, [height]);
+    }, [height, startTime, endTime, symbol, strikePrice, bettingEndTime]);
 
     return (
         <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "hidden" }}>
