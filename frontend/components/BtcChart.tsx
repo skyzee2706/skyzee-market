@@ -122,20 +122,54 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
         async function fetchLive() {
             try {
-                // Primary Live Price: Pyth Network (Lightning fast, reliable)
-                const res = await fetch("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43");
-                const data = await res.json();
-                if (isMounted && data.parsed && data.parsed.length > 0) {
-                    const pythPrice = Number(data.parsed[0].price.price) * Math.pow(10, data.parsed[0].price.expo);
-                    setLivePrice(pythPrice);
+                const prices: number[] = [];
+
+                // 1. Pyth Network
+                try {
+                    const pyth = await fetch("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", { cache: "no-store" });
+                    const pythData = await pyth.json();
+                    if (pythData.parsed && pythData.parsed.length > 0) {
+                        const p = Number(pythData.parsed[0].price.price) * Math.pow(10, pythData.parsed[0].price.expo);
+                        if (p > 0) prices.push(p);
+                    }
+                } catch (e) {
+                    console.error("Pyth API error", e);
+                }
+
+                // 2. CoinGecko
+                try {
+                    const cg = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", { cache: "no-store" });
+                    const cgData = await cg.json();
+                    const p = Number(cgData.bitcoin.usd);
+                    if (p > 0) prices.push(p);
+                } catch (e) {
+                    console.error("CoinGecko API error", e);
+                }
+
+                // 3. MEXC
+                try {
+                    const mexc = await fetch("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT", { cache: "no-store" });
+                    const mexcData = await mexc.json();
+                    const p = Number(mexcData.price);
+                    if (p > 0) prices.push(p);
+                } catch (e) {
+                    console.error("MEXC API error", e);
+                }
+
+                if (prices.length > 0 && isMounted) {
+                    prices.sort((a, b) => a - b);
+                    const mid = Math.floor(prices.length / 2);
+                    const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+                    setLivePrice(medianPrice);
                 }
             } catch (err) {
-                console.error("Pyth API error:", err);
+                console.error("Live fetch wrapper error:", err);
             }
         }
 
         fetchHistoryAndLive();
-        const interval = setInterval(fetchLive, 2000); // Poll every 2 seconds
+        // Faster polling interval to make the chart feel highly responsive (1s)
+        const interval = setInterval(fetchLive, 1000);
 
         return () => {
             isMounted = false;
@@ -172,8 +206,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 borderVisible: false,
                 timeVisible: true,
                 secondsVisible: false,
-                fixLeftEdge: true,
-                fixRightEdge: true,
                 tickMarkFormatter: (time: Time) => {
                     const date = new Date((time as number) * 1000);
                     // Use standard en-US so it explicitly puts AM/PM
@@ -202,6 +234,24 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 type: "price",
                 precision: 2,
                 minMove: 0.01,
+            },
+            autoscaleInfoProvider: (original: any) => {
+                const res = original();
+                if (res !== null && res.priceRange !== null && strikePrice) {
+                    const maxDiff = Math.max(
+                        Math.abs(res.priceRange.maxValue - strikePrice),
+                        Math.abs(res.priceRange.minValue - strikePrice)
+                    );
+                    const padding = maxDiff * 0.15; // 15% padding above and below
+                    if (maxDiff === 0) return res;
+                    return {
+                        priceRange: {
+                            minValue: strikePrice - maxDiff - padding,
+                            maxValue: strikePrice + maxDiff + padding,
+                        },
+                    };
+                }
+                return res;
             },
         });
 
