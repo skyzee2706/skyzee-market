@@ -4,39 +4,35 @@ export const revalidate = 0; // Disable static caching so it always fetches live
 
 export async function GET() {
     try {
-        const prices: number[] = [];
-
-        // 1. Pyth Network
-        try {
+        const fetchPyth = async () => {
             const pyth = await fetch("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", { cache: "no-store", signal: AbortSignal.timeout(3000) });
             const pythData = await pyth.json();
             if (pythData.parsed && pythData.parsed.length > 0) {
-                const p = Number(pythData.parsed[0].price.price) * Math.pow(10, pythData.parsed[0].price.expo);
-                if (p > 0) prices.push(p);
+                return Number(pythData.parsed[0].price.price) * Math.pow(10, pythData.parsed[0].price.expo);
             }
-        } catch (e) {
-            console.error("Next API Pyth error");
-        }
+            return null;
+        };
 
-        // 2. CoinGecko
-        try {
+        const fetchCG = async () => {
             const cg = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", { cache: "no-store", signal: AbortSignal.timeout(3000) });
             const cgData = await cg.json();
-            const p = Number(cgData.bitcoin.usd);
-            if (p > 0) prices.push(p);
-        } catch (e) {
-            console.error("Next API CG error");
-        }
+            return Number(cgData.bitcoin.usd);
+        };
 
-        // 3. MEXC
-        try {
+        const fetchMEXC = async () => {
             const mexc = await fetch("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT", { cache: "no-store", signal: AbortSignal.timeout(2000) });
             const mexcData = await mexc.json();
-            const p = Number(mexcData.price);
-            if (p > 0) prices.push(p);
-        } catch (e) {
-            console.error("Next API MEXC error");
-        }
+            return Number(mexcData.price);
+        };
+
+        const results = await Promise.allSettled([fetchPyth(), fetchCG(), fetchMEXC()]);
+
+        const prices: number[] = [];
+        results.forEach(res => {
+            if (res.status === 'fulfilled' && res.value && res.value > 0) {
+                prices.push(res.value);
+            }
+        });
 
         if (prices.length === 0) {
             return NextResponse.json({ error: "All backend APIs failed to load" }, { status: 500 });

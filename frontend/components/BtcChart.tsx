@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createChart, BaselineSeries, IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import { createChart, BaselineSeries, LineSeries, IChartApi, ISeriesApi, Time } from "lightweight-charts";
 
 interface BtcChartProps {
     symbol?: string; // e.g. "BTCUSDT"
@@ -76,26 +76,18 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
                 if (startTime) {
                     historicalData = historicalData.filter(d => (d.time as number) >= startTime);
-                }
-
-                // Force timeline from left-to-right even if history is totally blank
-                let lastTime = startTime || (Math.floor(Date.now() / 1000) - 3600);
-                if (historicalData.length > 0) {
-                    lastTime = historicalData[historicalData.length - 1].time as number;
-                } else if (startTime) {
-                    // Anchor whitespace precisely at market creation
-                    historicalData.push({ time: startTime as Time });
-                }
-
-                // Pad future whitespace to lock the X-axis frame up to endTime
-                if (endTime && historicalData.length > 0) {
-                    while (lastTime < endTime) {
-                        lastTime += intervalSec;
-                        historicalData.push({ time: lastTime as Time }); // Explicitly push whitespace
-                    }
+                    // Filter out future CoinGecko artifacts if any exist so our live monotonic `update()` doesn't get rejected
+                    const nowSec = Math.floor(Date.now() / 1000);
+                    historicalData = historicalData.filter(d => (d.time as number) <= nowSec);
                 }
 
                 if (isMounted && seriesRef.current) {
+                    if (historicalData.length > 0) {
+                        lastUpdatedTimeRef.current = historicalData[historicalData.length - 1].time as number;
+                    } else if (startTime) {
+                        lastUpdatedTimeRef.current = startTime - 1; // Start strictly before first tick
+                    }
+
                     seriesRef.current.setData(historicalData);
 
                     // Add markers for Betting Closes and Market Ended
@@ -167,6 +159,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
     }, []);
 
     const priceRef = useRef<number | null>(null);
+    const lastUpdatedTimeRef = useRef<number>(0);
 
     // Keep the ref updated with the latest price without causing the chart to rebuild
     useEffect(() => {
@@ -265,6 +258,31 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             },
         });
 
+        const invisibleSeries = chart.addSeries(LineSeries, {
+            color: 'transparent',
+            lineWidth: 1,
+            crosshairMarkerVisible: false,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            // Prevent invisible baseline from warping Y-axis symmetry
+            autoscaleInfoProvider: () => null,
+        });
+
+        // The Invisible Series provides the explicit shared global time Grid.
+        // This guarantees the True Left-to-Right drawing timeline without polluting our real Baseline data with future dates.
+        if (startTime && endTime) {
+            const timeData: any[] = [];
+            let t = startTime;
+            while (t <= endTime) {
+                timeData.push({ time: t as Time, value: strikePrice || 0 });
+                t += 300; // Lay out 5 min rigid empty track
+            }
+            if (!timeData.some(d => d.time === endTime)) {
+                timeData.push({ time: endTime as Time, value: strikePrice || 0 });
+            }
+            invisibleSeries.setData(timeData);
+        }
+
         if (strikePrice) {
             series.createPriceLine({
                 price: strikePrice,
@@ -290,10 +308,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     return;
                 }
 
-                seriesRef.current.update({
-                    time: now,
-                    value: priceRef.current
-                });
+                // Strict monotonic appending required by lightweight-charts update()
+                if (currentTimestamp > lastUpdatedTimeRef.current) {
+                    seriesRef.current.update({
+                        time: currentTimestamp as Time,
+                        value: priceRef.current
+                    });
+                    lastUpdatedTimeRef.current = currentTimestamp;
+                }
 
                 // Sync the vertical "Closed Bet" line position
                 if (bettingEndTime) {
