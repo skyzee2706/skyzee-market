@@ -73,6 +73,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                         lastUpdatedTimeRef.current = startTime - 1;
                     }
                     seriesRef.current.setData(sanitized);
+                    try {
+                        chartRef.current?.timeScale().setVisibleRange({ from: startTime as Time, to: endTime as Time });
+                    } catch (e) { }
                 }
             } catch (err) {
                 console.error("Failed to fetch internal history:", err);
@@ -160,7 +163,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         });
 
         if (startTime && endTime) {
-            chart.timeScale().setVisibleRange({ from: startTime as Time, to: endTime as Time });
+            try {
+                chart.timeScale().setVisibleRange({ from: startTime as Time, to: endTime as Time });
+            } catch (e) {
+                console.warn("Initial setVisibleRange failed, will retry after data loads.");
+            }
         }
 
         if (strikePrice) {
