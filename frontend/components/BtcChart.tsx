@@ -60,20 +60,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     let lastTime = historicalData[historicalData.length - 1].time as number;
                     while (lastTime < endTime) {
                         lastTime += intervalSec;
-                        if (lastTime <= endTime) {
-                            historicalData.push({ time: lastTime as Time });
-                        }
+                        historicalData.push({ time: lastTime as Time }); // Explicitly push whitespace to lock timeline Left-to-Right
                     }
-                    if (bettingEndTime && !historicalData.some(d => d.time === bettingEndTime)) {
-                        historicalData.push({ time: bettingEndTime as Time });
-                    }
-                    if (!historicalData.some(d => d.time === endTime)) {
-                        historicalData.push({ time: endTime as Time });
-                    }
-                    historicalData.sort((a, b) => (a.time as number) - (b.time as number));
                 }
 
-                if (seriesRef.current) {
+                if (isMounted && seriesRef.current) {
                     seriesRef.current.setData(historicalData);
 
                     // Add markers for Betting Closes and Market Ended
@@ -103,10 +94,12 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
                     // Enforce strict Left-to-Right drawing by locking the Timeline
                     if (startTime && endTime) {
-                        chartRef.current?.timeScale().setVisibleRange({
-                            from: startTime as Time,
-                            to: endTime as Time
-                        });
+                        setTimeout(() => {
+                            chartRef.current?.timeScale().setVisibleRange({
+                                from: startTime as Time,
+                                to: endTime as Time
+                            });
+                        }, 50);
                     } else {
                         chartRef.current?.timeScale().fitContent();
                     }
@@ -243,12 +236,15 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                         Math.abs(res.priceRange.minValue - strikePrice)
                     );
                     const padding = maxDiff * 0.15; // 15% padding above and below
-                    if (maxDiff === 0) return res;
+                    if (maxDiff === 0) {
+                        return { priceRange: { minValue: strikePrice - 100, maxValue: strikePrice + 100 }, margins: { above: 0, below: 0 } };
+                    }
                     return {
                         priceRange: {
                             minValue: strikePrice - maxDiff - padding,
                             maxValue: strikePrice + maxDiff + padding,
                         },
+                        margins: { above: 0, below: 0 } // Eliminates auto-margins so it stays exactly centered
                     };
                 }
                 return res;
@@ -299,10 +295,17 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
         const handleResize = () => {
             if (chartContainerRef.current) {
-                chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+                // Determine remaining height in the viewport to act "Full Frame"
+                const rect = chartContainerRef.current.getBoundingClientRect();
+                const availableHeight = window.innerHeight - rect.top;
+                chart.applyOptions({
+                    width: chartContainerRef.current.clientWidth,
+                    height: Math.max(availableHeight, 400) // Minimum 400px height, else fill screen
+                });
             }
         };
         window.addEventListener("resize", handleResize);
+        setTimeout(handleResize, 100); // Initial fit
 
         return () => {
             clearInterval(interval);
