@@ -95,20 +95,21 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
         let prices = allPoints.map(p => p.value);
         const midP = strikePrice;
 
+        // Calculate symmetric range centering strikePrice
         const maxDelta = prices.length > 0 ? Math.max(...prices.map(p => Math.abs(p - midP))) : 50;
         const buffer = Math.max(maxDelta, 40) * 1.5;
 
         const minScale = midP - buffer;
         const maxScale = midP + buffer;
 
-        const chartWidth = width - 85;
-        const getX = (t: number) => ((t - startTime) / (endTime - startTime)) * chartWidth;
+        // Chart spans full width from edge to edge
+        const getX = (t: number) => ((t - startTime) / (endTime - startTime)) * width;
 
         const paddingY = 70;
-        const chartAreaH = height - paddingY * 2 - 30;
+        const chartAreaH = height - paddingY * 2 - 30; // 30 for legend
         const getY = (p: number) => paddingY + chartAreaH - ((p - minScale) / (maxScale - minScale)) * chartAreaH;
 
-        return { getX, getY, minScale, maxScale, midP, strikeY: getY(midP), chartWidth };
+        return { getX, getY, minScale, maxScale, midP, strikeY: getY(midP), chartWidth: width };
     }, [allPoints, startTime, endTime, width, height, strikePrice]);
 
     const paths = useMemo(() => {
@@ -136,7 +137,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        // Find nearest point
         let nearest = allPoints[0];
         let minDist = Math.abs(scale.getX(allPoints[0].time) - x);
 
@@ -221,14 +221,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
                         </clipPath>
                     </defs>
 
-                    {/* Horizontal Grid & Price Labels */}
+                    {/* Horizontal Grid & Price Labels (Placed over chart now) */}
                     {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
                         const y = 70 + f * (height - 170);
                         const price = scale.maxScale - f * (scale.maxScale - scale.minScale);
                         return (
                             <g key={i}>
-                                <line x1="0" y1={y} x2={width - 85} y2={y} stroke="rgba(255,255,255,0.03)" />
-                                <text x={width - 75} y={y + 4} fill="rgba(255,255,255,0.15)" fontSize="9" fontFamily="monospace">
+                                <line x1="0" y1={y} x2={width} y2={y} stroke="rgba(255,255,255,0.03)" />
+                                <text x={width - 10} y={y - 4} textAnchor="end" fill="rgba(255,255,255,0.15)" fontSize="9" fontFamily="monospace">
                                     {Math.round(price)}
                                 </text>
                             </g>
@@ -253,12 +253,12 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
                     <text x="50" y={height - 16} fill="rgba(255,255,255,0.5)" fontSize="10" fontFamily="monospace" fontWeight="700">BETTING CLOSE TIME</text>
 
                     {/* TARGET PRICE LINE */}
-                    <line x1="0" y1={scale.strikeY} x2={width - 85} y2={scale.strikeY} stroke="#00ccff" strokeDasharray="4 4" strokeWidth="1" />
-                    <rect x={width - 82} y={scale.strikeY - 10} width="75" height="20" rx="4" fill="#00ccff" />
-                    <text x={width - 45} y={scale.strikeY + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="950" fontFamily="monospace">
+                    <line x1="0" y1={scale.strikeY} x2={width} y2={scale.strikeY} stroke="#00ccff" strokeDasharray="4 4" strokeWidth="1" />
+                    <rect x={width - 75} y={scale.strikeY - 10} width="75" height="20" fill="#00ccff" />
+                    <text x={width - 37} y={scale.strikeY + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="950" fontFamily="monospace">
                         {strikePrice?.toFixed(2)}
                     </text>
-                    <text x={width - 65} y={scale.strikeY - 15} textAnchor="end" fill="#00ccff" fontSize="9" fontWeight="800">Target</text>
+                    <text x={width - 7} y={scale.strikeY - 15} textAnchor="end" fill="#00ccff" fontSize="9" fontWeight="800">Target</text>
 
                     {/* Vertical Markers */}
                     {actualBettingEndTime && (
@@ -280,12 +280,12 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
                             </g>
 
                             {/* LIVE HORIZONTAL PRICE LINE */}
-                            <line x1={paths.lastX} y1={paths.lastY} x2={width - 82} y2={paths.lastY} stroke={isAbove ? "#9cfc0d" : "#ff375f"} strokeDasharray="4 4" strokeWidth="1" />
+                            <line x1={paths.lastX} y1={paths.lastY} x2={width} y2={paths.lastY} stroke={isAbove ? "#9cfc0d" : "#ff375f"} strokeDasharray="4 4" strokeWidth="1" />
 
                             {/* Current Price Dot & Label */}
                             <circle cx={paths.lastX} cy={paths.lastY} r="3" fill={isAbove ? "#9cfc0d" : "#ff375f"} stroke="#fff" strokeWidth="1" />
-                            <rect x={width - 82} y={paths.lastY - 10} width="75" height="20" rx="4" fill={isAbove ? "#9cfc0d" : "#ff375f"} />
-                            <text x={width - 45} y={paths.lastY + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="950" fontFamily="monospace">
+                            <rect x={width - 75} y={paths.lastY - 10} width="75" height="20" fill={isAbove ? "#9cfc0d" : "#ff375f"} />
+                            <text x={width - 37} y={paths.lastY + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="950" fontFamily="monospace">
                                 {livePrice?.toFixed(2)}
                             </text>
                         </>
@@ -301,7 +301,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
                             />
                             <line
                                 x1="0" y1={scale.getY(hoverPoint.value)}
-                                x2={width - 85} y2={scale.getY(hoverPoint.value)}
+                                x2={width} y2={scale.getY(hoverPoint.value)}
                                 stroke="rgba(255,255,255,0.3)" strokeDasharray="4 4" strokeWidth="1"
                             />
 

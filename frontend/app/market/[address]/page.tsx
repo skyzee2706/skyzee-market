@@ -120,15 +120,15 @@ export default function MarketPage({
 
             <div
                 style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 380px",
-                    gap: "32px",
-                    alignItems: "start",
+                    maxWidth: "800px",
+                    margin: "0 auto",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "24px",
                 }}
             >
-                {/* LEFT COLUMN */}
+                {/* Status */}
                 <div>
-                    {/* Status */}
                     <div
                         style={{
                             display: "inline-block",
@@ -200,9 +200,9 @@ export default function MarketPage({
                             background: "var(--bg-card)",
                             border: "1px solid var(--border)",
                             borderRadius: "16px",
-                            padding: "0px", // Removed padding so graph touches edges fully as requested
+                            padding: "0px",
                             marginBottom: "24px",
-                            height: "450px", // Expanded height to ensure target line and timeline are not clipped
+                            height: "450px",
                             overflow: "hidden",
                         }}
                     >
@@ -280,6 +280,18 @@ export default function MarketPage({
                         )}
                     </div>
 
+                    {/* BetPanel Moved Here */}
+                    <div style={{ marginBottom: "24px" }}>
+                        <BetPanel
+                            address={addr}
+                            marketInfo={marketInfo}
+                            yesBet={yesBet ?? 0n}
+                            noBet={noBet ?? 0n}
+                            claimed={claimed ?? false}
+                            onSuccess={handleSuccess}
+                        />
+                    </div>
+
                     {/* Resolution info */}
                     <div
                         style={{
@@ -290,6 +302,7 @@ export default function MarketPage({
                             fontSize: "13px",
                             color: "var(--text-muted)",
                             lineHeight: 1.7,
+                            marginBottom: "24px",
                         }}
                     >
                         <span style={{ fontWeight: 700, color: "var(--text-secondary)" }}>Resolution rule: </span>
@@ -300,7 +313,7 @@ export default function MarketPage({
                     </div>
 
                     {/* Contract address */}
-                    <div style={{ marginTop: "16px", fontSize: "12px", color: "var(--text-muted)" }}>
+                    <div style={{ marginTop: "16px", fontSize: "12px", color: "var(--text-muted)", marginBottom: "32px" }}>
                         Contract:{" "}
                         <a
                             href={`https://sepolia.etherscan.io/address/${addr}`}
@@ -312,16 +325,6 @@ export default function MarketPage({
                         </a>
                     </div>
                 </div>
-
-                {/* RIGHT COLUMN — BetPanel */}
-                <BetPanel
-                    address={addr}
-                    marketInfo={marketInfo}
-                    yesBet={yesBet ?? 0n}
-                    noBet={noBet ?? 0n}
-                    claimed={claimed ?? false}
-                    onSuccess={handleSuccess}
-                />
             </div>
         </div>
     );
