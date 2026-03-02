@@ -199,6 +199,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 borderVisible: false,
                 timeVisible: true,
                 secondsVisible: false,
+                shiftVisibleRangeOnNewBar: false, // PREVENTS chart from forcefully auto-scrolling right on every tick
                 tickMarkFormatter: (time: Time) => {
                     const date = new Date((time as number) * 1000);
                     // Use standard en-US so it explicitly puts AM/PM
@@ -230,12 +231,29 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             },
             autoscaleInfoProvider: (original: any) => {
                 const res = original();
-                if (res !== null && res.priceRange !== null && strikePrice) {
+
+                // CRUCIAL FIX: Ensure our extreme live prices are ALWAYS considered in the min/max calculation 
+                // so the chart perfectly zooms out and never cuts off the green/red line at the bottom or top.
+                let currentMin = strikePrice || 0;
+                let currentMax = strikePrice || 0;
+
+                if (res !== null && res.priceRange !== null) {
+                    currentMin = res.priceRange.minValue;
+                    currentMax = res.priceRange.maxValue;
+                }
+
+                if (priceRef.current !== null) {
+                    currentMin = Math.min(currentMin, priceRef.current);
+                    currentMax = Math.max(currentMax, priceRef.current);
+                }
+
+                if (strikePrice) {
                     const maxDiff = Math.max(
-                        Math.abs(res.priceRange.maxValue - strikePrice),
-                        Math.abs(res.priceRange.minValue - strikePrice)
+                        Math.abs(currentMax - strikePrice),
+                        Math.abs(currentMin - strikePrice)
                     );
                     const padding = maxDiff * 0.15; // 15% padding above and below
+
                     if (maxDiff === 0) {
                         return { priceRange: { minValue: strikePrice - 100, maxValue: strikePrice + 100 }, margins: { above: 0, below: 0 } };
                     }
@@ -297,10 +315,10 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             if (chartContainerRef.current) {
                 // Determine remaining height in the viewport to act "Full Frame"
                 const rect = chartContainerRef.current.getBoundingClientRect();
-                const availableHeight = window.innerHeight - rect.top;
+                const availableHeight = window.innerHeight - rect.top - 20; // 20px padding bottom
                 chart.applyOptions({
                     width: chartContainerRef.current.clientWidth,
-                    height: Math.max(availableHeight, 400) // Minimum 400px height, else fill screen
+                    height: Math.max(availableHeight, 350) // Minimum 350px height, else fill screen smoothly
                 });
             }
         };
