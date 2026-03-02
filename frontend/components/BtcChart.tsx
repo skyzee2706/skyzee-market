@@ -16,7 +16,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
-    const invisibleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
     const [livePrice, setLivePrice] = useState<number | null>(null);
     const priceRef = useRef<number | null>(null);
@@ -160,33 +159,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             }
         });
 
-        const invisible = chart.addSeries(LineSeries, {
-            color: 'transparent',
-            lineWidth: 1,
-            crosshairMarkerVisible: false,
-            lastValueVisible: false,
-            priceLineVisible: false,
-            autoscaleInfoProvider: () => null,
-        });
-
         if (startTime && endTime) {
-            const grid: any[] = [];
-            let t = startTime;
-            while (t <= endTime) {
-                grid.push({ time: t as Time, value: strikePrice || 0 });
-                t += 300;
-            }
-            if (bettingEndTime) grid.push({ time: bettingEndTime as Time, value: strikePrice || 0 });
-            grid.push({ time: endTime as Time, value: strikePrice || 0 });
-            grid.sort((a, b) => (a.time as number) - (b.time as number));
-            const unique = grid.filter((v, i, a) => !i || v.time !== a[i - 1].time);
-            invisible.setData(unique);
-
-            const m: any[] = [];
-            if (bettingEndTime) m.push({ time: bettingEndTime as Time, position: "aboveBar", color: "#f59e0b", shape: "arrowDown", text: "Betting Closes" });
-            if (endTime) m.push({ time: endTime as Time, position: "aboveBar", color: "#ef4444", shape: "arrowDown", text: "Market Ends" });
-            if (m.length > 0) (invisible as any).setMarkers(m);
-
             chart.timeScale().setVisibleRange({ from: startTime as Time, to: endTime as Time });
         }
 
@@ -196,7 +169,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
         chartRef.current = chart;
         seriesRef.current = series;
-        invisibleSeriesRef.current = invisible;
 
         const loop = setInterval(() => {
             if (priceRef.current && seriesRef.current) {
@@ -209,12 +181,24 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     lastUpdatedTimeRef.current = now;
                 }
 
-                if (bettingEndTime && chartRef.current) {
-                    const x = chartRef.current.timeScale().timeToCoordinate(bettingEndTime as Time);
-                    const div = document.getElementById("closed-bet-line");
-                    if (div && x !== null) {
-                        div.style.left = `${x}px`;
-                        div.style.display = "block";
+                if (chartRef.current) {
+                    // Update Betting Closed line
+                    if (bettingEndTime) {
+                        const x = chartRef.current.timeScale().timeToCoordinate(bettingEndTime as Time);
+                        const div = document.getElementById("closed-bet-line");
+                        if (div && x !== null) {
+                            div.style.left = `${x}px`;
+                            div.style.display = "block";
+                        }
+                    }
+                    // Update Market Ends line
+                    if (endTime) {
+                        const x = chartRef.current.timeScale().timeToCoordinate(endTime as Time);
+                        const div = document.getElementById("market-end-line");
+                        if (div && x !== null) {
+                            div.style.left = `${x}px`;
+                            div.style.display = "block";
+                        }
                     }
                 }
             }
@@ -257,9 +241,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             </div>
             <div style={{ position: "relative", flexGrow: 1, width: "100%" }}>
                 <div ref={chartContainerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
-                <div id="closed-bet-line" style={{ position: "absolute", top: "0px", bottom: "26px", width: "1px", borderLeft: "2px dashed #4b5563", pointerEvents: "none", display: "none", zIndex: 5 }}>
-                    <div style={{ position: "absolute", top: "10px", left: "4px", color: "var(--text-muted)", fontSize: "11px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-card)", padding: "2px 4px", borderRadius: "4px" }}>
-                        Betting Closed
+                <div id="closed-bet-line" style={{ position: "absolute", top: "0px", bottom: "26px", width: "1px", borderLeft: "2px dashed #f59e0b", pointerEvents: "none", display: "none", zIndex: 5 }}>
+                    <div style={{ position: "absolute", top: "10px", left: "4px", color: "#f59e0b", fontSize: "11px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-card)", padding: "2px 4px", borderRadius: "4px", whiteSpace: "nowrap" }}>
+                        Betting Closes
+                    </div>
+                </div>
+                <div id="market-end-line" style={{ position: "absolute", top: "0px", bottom: "26px", width: "1px", borderLeft: "2px dashed #ef4444", pointerEvents: "none", display: "none", zIndex: 5 }}>
+                    <div style={{ position: "absolute", top: "40px", left: "4px", color: "#ef4444", fontSize: "11px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.5px", background: "var(--bg-card)", padding: "2px 4px", borderRadius: "4px", whiteSpace: "nowrap" }}>
+                        Market Ends
                     </div>
                 </div>
             </div>
