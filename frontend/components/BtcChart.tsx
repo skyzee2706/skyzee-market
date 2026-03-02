@@ -222,10 +222,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         // Tick every 1 second continuously matching real time updates
         const interval = setInterval(() => {
             if (priceRef.current && seriesRef.current) {
-                const now = Math.floor(Date.now() / 1000) as Time;
+                const currentTimestamp = Math.floor(Date.now() / 1000);
+                const now = currentTimestamp as Time;
 
                 // Stop injecting live updates if the market is definitively ended (prevents X-axis skewing into whitespace)
-                if (endTime && now > endTime) {
+                if (endTime && currentTimestamp > endTime) {
                     return;
                 }
 
