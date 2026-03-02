@@ -21,6 +21,8 @@ dotenv.config();
 import { ethers } from "ethers";
 import cron from "node-cron";
 import axios from "axios";
+import * as fs from "fs";
+import * as path from "path";
 
 // ── Config ────────────────────────────────────────────────────────────────
 const RPC_URL = process.env.SEPOLIA_RPC_URL || "";
@@ -301,6 +303,44 @@ async function runWeekly() {
     }
 }
 
+// ── Price History Storage ──────────────────────────────────────────────────
+const PRICES_CSV = path.join(process.cwd(), "price_history.csv");
+
+/** Appends a new price point to the CSV file */
+async function savePriceToHistory(price: bigint) {
+    const now = Math.floor(Date.now() / 1000);
+    const usd = Number(price) / 1e8;
+    const line = `${now},${usd}\n`;
+
+    try {
+        if (!fs.existsSync(PRICES_CSV)) {
+            fs.writeFileSync(PRICES_CSV, "timestamp,price\n");
+        }
+        fs.appendFileSync(PRICES_CSV, line);
+    } catch (err) {
+        console.error("❌ Failed to save price to history:", err);
+    }
+}
+
+/** Keeps only the last 24 hours of data in the CSV (approx 86400 lines) */
+async function prunePriceHistory() {
+    try {
+        if (!fs.existsSync(PRICES_CSV)) return;
+        const data = fs.readFileSync(PRICES_CSV, "utf8").split("\n");
+        const header = data[0];
+        const body = data.slice(1).filter(l => l.trim() !== "");
+
+        const maxLines = 86400; // 24h at 1s intervals
+        if (body.length > maxLines) {
+            const pruned = [header, ...body.slice(body.length - maxLines)].join("\n") + "\n";
+            fs.writeFileSync(PRICES_CSV, pruned);
+            console.log(`   🧹 Pruned price history to ${maxLines} lines.`);
+        }
+    } catch (err) {
+        console.error("❌ Failed to prune price history:", err);
+    }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -317,13 +357,27 @@ async function main() {
     console.log("\n▶️  Running initial resolution sweep on startup...");
     await resolveMarkets();
 
-    // ── Loop: Auto-Resolve safely overlapping prevention
+    // ── Loop 1: Price Collector (1s)
+    console.log("\n📈 Price collector started: Every 1 second");
+    setInterval(async () => {
+        try {
+            const price = await getLivePrice(1); // 1 retry only for high frequency
+            await savePriceToHistory(price);
+        } catch (e) {
+            // Silently fail if one fetch fails, next second will retry
+        }
+    }, 1000);
+
+    // ── Loop 2: History Pruning (1h)
+    setInterval(prunePriceHistory, 3600_000);
+
+    // ── Loop 3: Auto-Resolve safely overlapping prevention
     console.log("\n🔄 Auto-resolve scheduled: Every 30 seconds");
 
     // Instead of node-cron, use a self-invoking loop to prevent overlap if a sweep takes >30s
     while (true) {
-        await new Promise(res => setTimeout(res, 30_000));
         await resolveMarkets();
+        await new Promise(res => setTimeout(res, 30_000));
     }
 }
 

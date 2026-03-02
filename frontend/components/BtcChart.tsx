@@ -29,58 +29,59 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
         }
     }, [livePrice]);
 
-    // Loop 1: Fetch History (CoinGecko -> MEXC)
+    // Utility to sanitize data for lightweight-charts
+    const sanitizeData = (data: any[]) => {
+        if (!data || data.length === 0) return [];
+        // Sort by time ascending
+        const sorted = [...data].sort((a, b) => Number(a.time) - Number(b.time));
+        // Remove duplicates (keep the latest one for each timestamp)
+        const unique: any[] = [];
+        const seenTimes = new Set();
+        for (let i = sorted.length - 1; i >= 0; i--) {
+            if (!seenTimes.has(sorted[i].time)) {
+                unique.unshift(sorted[i]);
+                seenTimes.add(sorted[i].time);
+            }
+        }
+        return unique;
+    };
+
+    // Loop 1: Fetch History from Private API
     useEffect(() => {
         let isMounted = true;
         async function fetchHistory() {
             if (!startTime || !endTime) return;
             try {
-                let historicalData: any[] = [];
-                // 1. CoinGecko
-                try {
-                    const daysSpan = Math.ceil((Date.now() / 1000 - startTime) / 86400);
-                    const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${Math.max(1, daysSpan)}`);
-                    if (cgRes.ok) {
-                        const data = await cgRes.json();
-                        historicalData = data.prices.map((p: any) => ({
-                            time: Math.floor(p[0] / 1000) as Time,
-                            value: p[1]
-                        }));
-                    } else { throw new Error("CG fall"); }
-                } catch (e) {
-                    // 2. MEXC Fallback
-                    try {
-                        const res = await fetch(`https://api.mexc.com/api/v3/klines?symbol=${symbol}&interval=5m&startTime=${startTime * 1000}&limit=1000`);
-                        if (res.ok) {
-                            const data = await res.json();
-                            historicalData = data.map((k: any) => ({
-                                time: Math.floor(k[0] / 1000) as Time,
-                                value: Number(k[1])
-                            }));
-                        }
-                    } catch (mErr) { console.error("History fallback failed"); }
-                }
+                const res = await fetch("/api/history", { cache: "no-store" });
+                if (!res.ok) throw new Error("History API failed");
+                const data = await res.json();
+                let historicalData = data.history || [];
 
                 if (!isMounted) return;
 
                 // Filter to market window
-                historicalData = historicalData.filter(d => (d.time as number) >= startTime);
+                historicalData = historicalData.filter((d: any) => d.time >= startTime);
                 const nowSec = Math.floor(Date.now() / 1000);
-                historicalData = historicalData.filter(d => (d.time as number) <= nowSec);
+                historicalData = historicalData.filter((d: any) => d.time <= nowSec);
+
+                // Santize: sort and deduplicate
+                const sanitized = sanitizeData(historicalData);
 
                 if (seriesRef.current) {
-                    if (historicalData.length > 0) {
-                        lastUpdatedTimeRef.current = historicalData[historicalData.length - 1].time as number;
+                    if (sanitized.length > 0) {
+                        lastUpdatedTimeRef.current = Number(sanitized[sanitized.length - 1].time);
                     } else {
                         lastUpdatedTimeRef.current = startTime - 1;
                     }
-                    seriesRef.current.setData(historicalData);
+                    seriesRef.current.setData(sanitized);
                 }
-            } catch (err) { console.error(err); }
+            } catch (err) {
+                console.error("Failed to fetch internal history:", err);
+            }
         }
         fetchHistory();
         return () => { isMounted = false; };
-    }, [startTime, endTime, symbol]);
+    }, [startTime, endTime]);
 
     // Loop 2: Fetch Live Price
     useEffect(() => {
@@ -201,10 +202,13 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
             if (priceRef.current && seriesRef.current) {
                 const now = Math.floor(Date.now() / 1000);
                 if (endTime && now > endTime) return;
-                if (now >= lastUpdatedTimeRef.current) {
+
+                // CRITICAL: Prevent "update time is earlier than last" error
+                if (now > lastUpdatedTimeRef.current) {
                     seriesRef.current.update({ time: now as Time, value: priceRef.current });
                     lastUpdatedTimeRef.current = now;
                 }
+
                 if (bettingEndTime && chartRef.current) {
                     const x = chartRef.current.timeScale().timeToCoordinate(bettingEndTime as Time);
                     const div = document.getElementById("closed-bet-line");
