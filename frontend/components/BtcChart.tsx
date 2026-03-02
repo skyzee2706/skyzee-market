@@ -25,42 +25,73 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
         async function fetchHistoryAndLive() {
             try {
-                let url = `https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1`;
-                let intervalSec = 300; // 5m default for 1 day
+                let historicalData: any[] = [];
+                let intervalSec = 300; // 5m default
 
                 if (startTime && endTime) {
                     const duration = endTime - startTime;
-                    let days = "1";
-                    if (duration > 3 * 86400) { days = "7"; intervalSec = 3600; }
-                    else if (duration > 86400) { days = "3"; intervalSec = 3600; }
-
-                    // CoinGecko auto-adjusts granularity based on 'days', but we want historical span covering our start time
-                    // Math.ceil converts duration to days.
-                    const daysSpan = Math.ceil((Date.now() / 1000 - startTime) / 86400);
-                    url = `https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${Math.max(1, daysSpan)}`;
+                    if (duration > 3 * 86400) { intervalSec = 3600; }
+                    else if (duration > 86400) { intervalSec = 3600; }
                 }
 
-                const res = await fetch(url);
-                const data = await res.json();
+                // 1. Try CoinGecko First
+                try {
+                    const daysSpan = startTime ? Math.ceil((Date.now() / 1000 - startTime) / 86400) : 1;
+                    const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=${Math.max(1, daysSpan)}`);
+                    if (cgRes.ok) {
+                        const data = await cgRes.json();
+                        historicalData = data.prices.map((p: any) => ({
+                            time: Math.floor(p[0] / 1000) as Time,
+                            value: p[1]
+                        }));
+                        if (data.prices && data.prices.length > 0) {
+                            setLivePrice(data.prices[data.prices.length - 1][1]);
+                        }
+                    } else {
+                        throw new Error("CoinGecko non-200 response");
+                    }
+                } catch (e) {
+                    console.warn("CoinGecko History blocked/failed, falling back to MEXC Klines...");
+                    // 2. Fallback to MEXC History
+                    try {
+                        const mexcInterval = intervalSec >= 3600 ? "60m" : "5m";
+                        const mexcStartTime = startTime ? `&startTime=${startTime * 1000}` : "";
+                        const mexcRes = await fetch(`https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=${mexcInterval}${mexcStartTime}&limit=1000`);
+                        if (mexcRes.ok) {
+                            const data = await mexcRes.json();
+                            historicalData = data.map((k: any) => ({
+                                time: Math.floor(k[0] / 1000) as Time, // OpenTime
+                                value: Number(k[1])                    // OpenPrice
+                            }));
+                            if (historicalData.length > 0) {
+                                setLivePrice(historicalData[historicalData.length - 1].value);
+                            }
+                        }
+                    } catch (mexcErr) {
+                        console.error("All History APIs failed to load, chart will start blank.");
+                    }
+                }
 
                 if (!isMounted) return;
 
-                let historicalData: any[] = data.prices.map((p: any) => ({
-                    time: Math.floor(p[0] / 1000) as Time,
-                    value: p[1]
-                }));
-
-                // Filter out history that is way before our start time (optional but clean)
                 if (startTime) {
                     historicalData = historicalData.filter(d => (d.time as number) >= startTime);
                 }
 
+                // Force timeline from left-to-right even if history is totally blank
+                let lastTime = startTime || (Math.floor(Date.now() / 1000) - 3600);
+                if (historicalData.length > 0) {
+                    lastTime = historicalData[historicalData.length - 1].time as number;
+                } else if (startTime) {
+                    // Anchor whitespace precisely at market creation
+                    historicalData.push({ time: startTime as Time });
+                }
+
                 // Pad future whitespace to lock the X-axis frame up to endTime
                 if (endTime && historicalData.length > 0) {
-                    let lastTime = historicalData[historicalData.length - 1].time as number;
                     while (lastTime < endTime) {
                         lastTime += intervalSec;
-                        historicalData.push({ time: lastTime as Time }); // Explicitly push whitespace to lock timeline Left-to-Right
+                        historicalData.push({ time: lastTime as Time }); // Explicitly push whitespace
                     }
                 }
 
@@ -88,7 +119,6 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                         });
                     }
                     if (markers.length > 0) {
-                        // Bypass exact generic constraints for older definition files
                         (seriesRef.current as any).setMarkers(markers);
                     }
 
@@ -104,56 +134,22 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                         chartRef.current?.timeScale().fitContent();
                     }
                 }
-
-                if (data.prices && data.prices.length > 0) {
-                    setLivePrice(data.prices[data.prices.length - 1][1]);
-                }
             } catch (err) {
-                console.error("CoinGecko history error:", err);
+                console.error("fetchHistoryAndLive wrapper error:", err);
             }
         }
 
         async function fetchLive() {
             try {
-                const prices: number[] = [];
-
-                // 1. Pyth Network
-                try {
-                    const pyth = await fetch("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", { cache: "no-store" });
-                    const pythData = await pyth.json();
-                    if (pythData.parsed && pythData.parsed.length > 0) {
-                        const p = Number(pythData.parsed[0].price.price) * Math.pow(10, pythData.parsed[0].price.expo);
-                        if (p > 0) prices.push(p);
+                // To guarantee 100% price synchronization between the Live Frontend Chart, the text UI, 
+                // and the backend PM2 resolve bot, the frontend now queries an internal server-side Next.js API route.
+                // This completely prevents browser AdBlockers or CORS errors from skewing the median price.
+                const res = await fetch("/api/price", { cache: "no-store" });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.price && data.price > 0) {
+                        setLivePrice(data.price);
                     }
-                } catch (e) {
-                    console.error("Pyth API error", e);
-                }
-
-                // 2. CoinGecko
-                try {
-                    const cg = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", { cache: "no-store" });
-                    const cgData = await cg.json();
-                    const p = Number(cgData.bitcoin.usd);
-                    if (p > 0) prices.push(p);
-                } catch (e) {
-                    console.error("CoinGecko API error", e);
-                }
-
-                // 3. MEXC
-                try {
-                    const mexc = await fetch("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT", { cache: "no-store" });
-                    const mexcData = await mexc.json();
-                    const p = Number(mexcData.price);
-                    if (p > 0) prices.push(p);
-                } catch (e) {
-                    console.error("MEXC API error", e);
-                }
-
-                if (prices.length > 0 && isMounted) {
-                    prices.sort((a, b) => a - b);
-                    const mid = Math.floor(prices.length / 2);
-                    const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
-                    setLivePrice(medianPrice);
                 }
             } catch (err) {
                 console.error("Live fetch wrapper error:", err);
