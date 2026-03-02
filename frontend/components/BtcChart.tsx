@@ -94,7 +94,15 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                         (seriesRef.current as any).setMarkers(markers);
                     }
 
-                    chartRef.current?.timeScale().fitContent();
+                    // Enforce strict Left-to-Right drawing by locking the Timeline
+                    if (startTime && endTime) {
+                        chartRef.current?.timeScale().setVisibleRange({
+                            from: startTime as Time,
+                            to: endTime as Time
+                        });
+                    } else {
+                        chartRef.current?.timeScale().fitContent();
+                    }
                 }
 
                 if (data.length > 0) {
