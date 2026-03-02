@@ -313,37 +313,39 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
 
         const handleResize = () => {
             if (chartContainerRef.current) {
-                // Determine remaining height in the viewport to act "Full Frame"
-                const rect = chartContainerRef.current.getBoundingClientRect();
-                const availableHeight = window.innerHeight - rect.top - 20; // 20px padding bottom
                 chart.applyOptions({
                     width: chartContainerRef.current.clientWidth,
-                    height: Math.max(availableHeight, 350) // Minimum 350px height, else fill screen smoothly
+                    height: chartContainerRef.current.clientHeight
                 });
             }
         };
-        window.addEventListener("resize", handleResize);
-        setTimeout(handleResize, 100); // Initial fit
+
+        const resizeObserver = new ResizeObserver(() => {
+            handleResize();
+        });
+
+        if (chartContainerRef.current) {
+            resizeObserver.observe(chartContainerRef.current);
+        }
 
         return () => {
             clearInterval(interval);
-            window.removeEventListener("resize", handleResize);
+            resizeObserver.disconnect();
             chart.remove();
         };
     }, [height]);
 
     return (
-        <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "hidden" }}>
+            {/* Header / HUD */}
             <div style={{
-                position: "absolute",
-                top: 10,
-                left: 16,
-                zIndex: 10,
+                padding: "16px 16px 8px 16px",
                 display: "flex",
                 flexDirection: "column",
-                pointerEvents: "none"
+                zIndex: 10,
+                flexShrink: 0
             }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "2px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
                     <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-muted)" }}>
                         {symbol.replace("USDT", " / USD")}
                     </span>
@@ -365,16 +367,19 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                     )}
                 </div>
             </div>
-            <div style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden" }}>
-                <div ref={chartContainerRef} style={{ width: "100%", paddingTop: "70px" }} />
+
+            {/* Chart Area */}
+            <div style={{ position: "relative", flexGrow: 1, width: "100%" }}>
+                {/* The ref container explicitly stretches across the bounds */}
+                <div ref={chartContainerRef} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
 
                 {/* Vertical Closed Bet Line Overlay */}
                 <div
                     id="closed-bet-line"
                     style={{
                         position: "absolute",
-                        top: "70px",
-                        bottom: "30px", // leave space for timeline
+                        top: "0px",
+                        bottom: "26px", // Leave exactly 26px explicit bottom space so it doesn't overlap the X-axis time labels
                         width: "1px",
                         borderLeft: "2px dashed #4b5563",
                         pointerEvents: "none",
@@ -384,13 +389,16 @@ export function BtcChart({ symbol = "BTCUSDT", height = 300, startTime, endTime,
                 >
                     <div style={{
                         position: "absolute",
-                        top: "0",
+                        top: "10px",
                         left: "4px",
-                        color: "#9ca3af",
-                        fontSize: "10px",
+                        color: "var(--text-muted)",
+                        fontSize: "11px",
                         fontWeight: "600",
                         textTransform: "uppercase",
-                        letterSpacing: "0.5px"
+                        letterSpacing: "0.5px",
+                        background: "var(--bg-card)",
+                        padding: "2px 4px",
+                        borderRadius: "4px"
                     }}>
                         Betting Closed
                     </div>

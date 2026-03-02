@@ -194,15 +194,15 @@ export default function MarketPage({
                             background: "var(--bg-card)",
                             border: "1px solid var(--border)",
                             borderRadius: "16px",
-                            padding: "16px",
+                            padding: "0px", // Removed padding so graph touches edges fully as requested
                             marginBottom: "24px",
-                            height: "300px",
+                            height: "450px", // Expanded height to ensure target line and timeline are not clipped
                             overflow: "hidden",
                         }}
                     >
                         <BtcChart
                             symbol="BTCUSDT"
-                            height={280}
+                            height={450}
                             startTime={startTime}
                             endTime={Number(endTime)}
                             bettingEndTime={Number(bettingEndTime)}
