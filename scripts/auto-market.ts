@@ -3,13 +3,15 @@
  * ───────────────────────────────────────────────────────────────────────────
  * Rial Market — Auto-scheduler for hourly and daily BTC/USD prediction markets
  *
- * Reads the live BTC/USD price from the deployed ChainlinkOracle on Sepolia,
- * then calls MarketFactory.createMarket() with that price as the strike price.
+ * Reads the live BTC/USD price from top public sources (Binance, Pyth, MEXC),
+ * then calls MarketFactory.createMarket() with the median price.
+ * 
+ * Logic is unified with the frontend API to ensure 100% price consistency.
  *
  * Schedule (UTC):
- *   Hourly  — at the start of every UTC hour  (cron: "0 * * * *")
- *   Daily   — at midnight UTC every day        (cron: "0 0 * * *")
- *   Storage — weekly CSV cleanup (Sunday 00:00 UTC)
+ *   Hourly  — at the start of every UTC hour
+ *   Daily   — at midnight UTC every day
+ *   Weekly  — every Sunday morning
  *
  * Usage:
  *   npm run auto-market
@@ -111,62 +113,57 @@ function nextWeekUTC(): number {
     return Math.floor(next.getTime() / 1000);
 }
 
-// ── Core: fetch price + deploy market ─────────────────────────────────────
-
-async function getOnChainBTCPrice(): Promise<bigint> {
-    const oracle = new ethers.Contract(ORACLE_ADDRESS, ORACLE_ABI, provider);
-    const price: bigint = await oracle.getPrice();
-    return price;
-}
+// ── Unified Price Engine ──────────────────────────────────────────────────
 
 /** 
- * ZERO-GAS SIMULATION: Fetch live price from multiple unblocked sources and find the median.
- * Formats price to 8 decimals to match Chainlink USD standard.
+ * Fetches BTC price from multiple top-tier sources and returns the median.
+ * Logic is MIRRORED in /api/price to ensure 100% parity.
  */
 async function getLivePrice(retries = 3): Promise<bigint> {
     for (let i = 0; i < retries; i++) {
         try {
             const prices: number[] = [];
 
-            // 1. Pyth Network (Hermes) - Very reliable, no API key
+            // 1. Binance Spot
             try {
-                const pyth = await axios.get("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", { timeout: 3000 });
-                // Pyth returns price with its own exponent, usually 1e8 for BTC
+                const binance = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", { timeout: 2000 });
+                const p = Number(binance.data.price);
+                if (p > 0) prices.push(p);
+            } catch (e) { }
+
+            // 2. Pyth Network (Hermes)
+            try {
+                const pyth = await axios.get("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", { timeout: 2000 });
                 const p = Number(pyth.data.parsed[0].price.price) * Math.pow(10, pyth.data.parsed[0].price.expo);
                 if (p > 0) prices.push(p);
             } catch (e) { }
 
-            // 2. CoinGecko - Reliable fallback
-            try {
-                const cg = await axios.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", { timeout: 3000 });
-                const p = Number(cg.data.bitcoin.usd);
-                if (p > 0) prices.push(p);
-            } catch (e) { }
-
-            // 3. Binance / MEXC (Might be blocked, fire-and-forget fallback)
+            // 3. MEXC Spot
             try {
                 const mexc = await axios.get("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT", { timeout: 2000 });
                 const p = Number(mexc.data.price);
                 if (p > 0) prices.push(p);
             } catch (e) { }
 
-            if (prices.length === 0) throw new Error("All APIs failed to return a price.");
+            if (prices.length === 0) throw new Error("Price collection failed.");
 
-            // Calculate Median
+            // Median Calculation
             prices.sort((a, b) => a - b);
             const mid = Math.floor(prices.length / 2);
             const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
 
-            const price8Decimals = Math.floor(medianPrice * 1e8);
-            return BigInt(price8Decimals);
+            // Chainlink standard: 8 decimals
+            return BigInt(Math.floor(medianPrice * 1e8));
         } catch (err) {
-            console.warn(`⚠️ API aggregation failed (attempt ${i + 1}/${retries}). Retrying...`);
-            if (i === retries - 1) throw new Error("API completely unreachable. Cannot resolve or create market fairly.");
-            await new Promise(r => setTimeout(r, 3000));
+            console.warn(`⚠️ Price sync failed (attempt ${i + 1}/${retries}).`);
+            if (i === retries - 1) throw err;
+            await new Promise(r => setTimeout(r, 2000));
         }
     }
     return 0n;
 }
+
+// ── Market Actions ────────────────────────────────────────────────────────
 
 async function createMarket(question: string, strikePrice: bigint, endTime: number, bettingEndTime: number) {
     const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
@@ -177,23 +174,18 @@ async function createMarket(question: string, strikePrice: bigint, endTime: numb
     console.log(`   Settles At     : ${new Date(endTime * 1000).toUTCString()}`);
 
     const tx = await factory.createMarket(question, strikePrice, endTime, bettingEndTime);
-    console.log(`   TX         : ${tx.hash}`);
     const receipt = await tx.wait();
-    console.log(`   ✅ Confirmed in block ${receipt.blockNumber}`);
+    console.log(`   ✅ Success: BTC/USD @ $${(Number(strikePrice) / 1e8).toFixed(2)} (Block ${receipt.blockNumber})`);
 }
 
 async function resolveMarkets() {
     try {
-        console.log(`\n🔍 [AUTO-RESOLVE] Checking recent markets...`);
+        console.log(`\n🔍 [AUTO-RESOLVE] Scanning recent markets...`);
         const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
         const allMarkets: string[] = await factory.getAllMarkets();
 
-        // ONLY CHECK THE LAST 50 MARKETS TO PREVENT RPC TIMEOUTS/OVERLOAD
         const recentMarkets = allMarkets.slice(-50);
-        console.log(`   Scanning last ${recentMarkets.length} of ${allMarkets.length} markets total.`);
-
         const now = Math.floor(Date.now() / 1000);
-        let resolvedCount = 0;
 
         let activeHourly = 0;
         let activeDaily = 0;
@@ -207,7 +199,6 @@ async function resolveMarkets() {
                 market.question()
             ]);
 
-            // Mutually exclusive type checks to avoid overlapping labels
             const isHourly = question.includes(" at ") && question.includes(" UTC?");
             const isDaily = question.includes(" by midnight ");
             const isWeekly = question.includes(" by ") && !question.includes(" midnight ");
@@ -220,162 +211,80 @@ async function resolveMarkets() {
             }
 
             if (!resolved && now >= Number(endTime)) {
-                console.log(`   ⚡ Resolving Market: ${question}`);
+                console.log(`   ⚡ Settling Market: ${question}`);
                 try {
-                    const livePrice = await getLivePrice();
-                    console.log(`      📡 Price: $${(Number(livePrice) / 1e8).toLocaleString()}`);
-                    const tx = await market.resolveWithCustomPrice(livePrice);
+                    const settlementPrice = await getLivePrice();
+                    console.log(`      📡 Settling @ $${(Number(settlementPrice) / 1e8).toLocaleString()}`);
+                    const tx = await market.resolveWithCustomPrice(settlementPrice);
                     await tx.wait();
-                    console.log(`      ✅ Success: ${marketAddr}`);
-                    resolvedCount++;
+                    console.log(`      ✅ Settled: ${marketAddr}`);
                 } catch (rErr: any) {
-                    console.error(`      ❌ Error ${marketAddr}:`, rErr.reason || rErr.message);
+                    console.error(`      ❌ Error ${marketAddr}:`, rErr.message);
                 }
             }
         }
 
-        console.log(`   📊 Current: ${activeHourly} Hourly, ${activeDaily} Daily, ${activeWeekly} Weekly active.`);
+        console.log(`   📊 Current Active: ${activeHourly}H, ${activeDaily}D, ${activeWeekly}W`);
 
-        if (activeHourly === 0) {
-            console.log(`      🔄 No active Hourly market. Triggering...`);
-            await runHourly();
-        }
-        if (activeDaily === 0) {
-            console.log(`      🔄 No active Daily market. Triggering...`);
-            await runDaily();
-        }
-        if (activeWeekly === 0) {
-            console.log(`      🔄 No active Weekly market. Triggering...`);
-            await runWeekly();
-        }
+        // Re-create markets if needed
+        if (activeHourly === 0) await runHourly();
+        if (activeDaily === 0) await runDaily();
+        if (activeWeekly === 0) await runWeekly();
 
     } catch (err) {
-        console.error("❌ Sweep failed:", err);
+        console.error("❌ Sweep failure:", err);
     }
 }
 
-// ── Scheduled jobs ────────────────────────────────────────────────────────
+// ── Scheduled Tasks ───────────────────────────────────────────────────────
 
 async function runHourly() {
-    console.log(`\n⏰ [HOURLY] ${new Date().toUTCString()}`);
     try {
         const price = await getLivePrice();
         const endTime = nextHourUTC();
         const bettingEndTime = endTime - 15 * 60;
         const label = formatHourUTC(endTime);
-        const usd = (Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 });
-        const question = `Will BTC/USD be above $${usd} at ${label}?`;
+        const question = `Will BTC/USD be above $${(Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 })} at ${label}?`;
         await createMarket(question, price, endTime, bettingEndTime);
-    } catch (err) {
-        console.error("❌ Hourly failed:", err);
-    }
+    } catch (err) { }
 }
 
 async function runDaily() {
-    console.log(`\n📅 [DAILY] ${new Date().toUTCString()}`);
     try {
         const price = await getLivePrice();
         const endTime = nextMidnightUTC();
         const bettingEndTime = endTime - 12 * 60 * 60;
         const label = formatDateUTC(endTime);
-        const usd = (Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 });
-        const question = `Will BTC/USD be above $${usd} by midnight ${label}?`;
+        const question = `Will BTC/USD be above $${(Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 })} by midnight ${label}?`;
         await createMarket(question, price, endTime, bettingEndTime);
-    } catch (err) {
-        console.error("❌ Daily failed:", err);
-    }
+    } catch (err) { }
 }
 
 async function runWeekly() {
-    console.log(`\n📅 [WEEKLY] ${new Date().toUTCString()}`);
     try {
         const price = await getLivePrice();
         const endTime = nextWeekUTC();
         const bettingEndTime = endTime - 3 * 24 * 60 * 60;
         const label = formatDateUTC(endTime);
-        const usd = (Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 });
-        const question = `Will BTC/USD be above $${usd} by ${label}?`;
+        const question = `Will BTC/USD be above $${(Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 })} by ${label}?`;
         await createMarket(question, price, endTime, bettingEndTime);
-    } catch (err) {
-        console.error("❌ Weekly failed:", err);
-    }
-}
-
-// ── Price History Storage ──────────────────────────────────────────────────
-const PRICES_CSV = path.join(process.cwd(), "price_history.csv");
-
-async function savePriceToHistory(price: bigint) {
-    const now = Math.floor(Date.now() / 1000);
-    const usd = Number(price) / 1e8;
-    const line = `${now},${usd}\n`;
-    try {
-        if (!fs.existsSync(PRICES_CSV)) fs.writeFileSync(PRICES_CSV, "timestamp,price\n");
-        fs.appendFileSync(PRICES_CSV, line);
     } catch (err) { }
-}
-
-async function prunePriceHistory() {
-    try {
-        if (!fs.existsSync(PRICES_CSV)) return;
-        const data = fs.readFileSync(PRICES_CSV, "utf8").split("\n");
-        const header = data[0];
-        const body = data.slice(1).filter(l => l.trim() !== "");
-        const maxLines = 86400;
-        if (body.length > maxLines) {
-            const pruned = [header, ...body.slice(body.length - maxLines)].join("\n") + "\n";
-            fs.writeFileSync(PRICES_CSV, pruned);
-        }
-    } catch (err) { }
-}
-
-// ── Storage Maintenance (Weekly Cleanup) ───────────────────────────────────
-
-/**
- * Clears the CSV history every Sunday at 00:00 UTC
- */
-function scheduleWeeklyCleanup() {
-    cron.schedule("0 0 * * 0", () => {
-        console.log(`\n🧹 [WEEKLY CLEANUP] Clearing price history CSV (Sunday 00:00 UTC)...`);
-        try {
-            fs.writeFileSync(PRICES_CSV, "timestamp,price\n");
-            console.log(`   ✅ Storage cleared successfully.`);
-        } catch (err) {
-            console.error(`   ❌ Failed to clear storage:`, err);
-        }
-    }, {
-        timezone: "UTC"
-    });
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
-    console.log("🚀 Rial Market — Auto-Scheduler starting...");
-    console.log(`   Factory  : ${FACTORY_ADDRESS}`);
-    console.log(`   Signer   : ${signer.address}`);
+    console.log("\n🚀 Rial Market Unified Node — Bot Starting...");
+    console.log(`   Signer: ${signer.address}`);
 
     const balance = await provider.getBalance(signer.address);
-    console.log(`   Balance  : ${ethers.formatEther(balance)} ETH`);
+    console.log(`   Balance: ${ethers.formatEther(balance)} ETH\n`);
 
-    // Initial resolution
+    // Initial check
     await resolveMarkets();
 
-    // Start Price History Collector (1s)
-    setInterval(async () => {
-        try {
-            const price = await getLivePrice(1);
-            await savePriceToHistory(price);
-        } catch (e) { }
-    }, 1000);
-
-    // Start History Pruning (1h)
-    setInterval(prunePriceHistory, 3600_000);
-
-    // Start Weekly History Cleanup Job
-    scheduleWeeklyCleanup();
-
-    // Start Auto-Resolve Loop (30s)
-    console.log("\n🔄 Auto-resolve scheduled: Every 30 seconds");
+    // Auto-Resolve Sweep (Every 30s)
+    console.log("🔄 Scheduler Active: Every 30 seconds");
     while (true) {
         await resolveMarkets();
         await new Promise(res => setTimeout(res, 30_000));
