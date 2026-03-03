@@ -183,76 +183,73 @@ async function createMarket(question: string, strikePrice: bigint, endTime: numb
 
 async function resolveMarkets() {
     try {
-        console.log(`\n🔍 [AUTO-RESOLVE] Checking for ended markets...`);
+        console.log(`\n🔍 [AUTO-RESOLVE] Checking recent markets...`);
         const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
         const allMarkets: string[] = await factory.getAllMarkets();
+
+        // ONLY CHECK THE LAST 50 MARKETS TO PREVENT RPC TIMEOUTS/OVERLOAD
+        const recentMarkets = allMarkets.slice(-50);
+        console.log(`   Scanning last ${recentMarkets.length} of ${allMarkets.length} markets total.`);
 
         const now = Math.floor(Date.now() / 1000);
         let resolvedCount = 0;
 
-        let hasActiveHourly = false;
-        let hasActiveDaily = false;
-        let hasActiveWeekly = false;
+        let activeHourly = 0;
+        let activeDaily = 0;
+        let activeWeekly = 0;
 
-        for (const marketAddr of allMarkets) {
+        for (const marketAddr of recentMarkets) {
             const market = new ethers.Contract(marketAddr, MARKET_ABI, signer);
-            // Fetch state once to minimize RPC hits
             const [endTime, resolved, question] = await Promise.all([
                 market.endTime(),
                 market.resolved(),
                 market.question()
             ]);
 
-            const isHourly = question.includes(" at ");
+            // Mutually exclusive type checks to avoid overlapping labels
+            const isHourly = question.includes(" at ") && question.includes(" UTC?");
             const isDaily = question.includes(" by midnight ");
-            const isWeekly = question.includes(" by ") && question.includes(" UTC");
+            const isWeekly = question.includes(" by ") && !question.includes(" midnight ");
 
-            // Check if this market is currently active and ongoing
             if (!resolved && now < Number(endTime)) {
-                if (isHourly) hasActiveHourly = true;
-                if (isDaily) hasActiveDaily = true;
-                if (isWeekly) hasActiveWeekly = true;
-                continue; // No need to process resolution for an active market
+                if (isHourly) activeHourly++;
+                if (isDaily) activeDaily++;
+                if (isWeekly) activeWeekly++;
+                continue;
             }
 
             if (!resolved && now >= Number(endTime)) {
-                console.log(`   ⚡ Resolving: ${question}`);
-                console.log(`      Contract: ${marketAddr}`);
+                console.log(`   ⚡ Resolving Market: ${question}`);
                 try {
-                    // ZERO-GAS SIMULATION: fetch the exact dancing price on UI right now
                     const livePrice = await getLivePrice();
-                    console.log(`      📡 Injecting Live Price: $${(Number(livePrice) / 1e8).toLocaleString()}`);
-
+                    console.log(`      📡 Price: $${(Number(livePrice) / 1e8).toLocaleString()}`);
                     const tx = await market.resolveWithCustomPrice(livePrice);
-                    const receipt = await tx.wait();
-                    console.log(`      ✅ Resolved in block ${receipt.blockNumber}`);
+                    await tx.wait();
+                    console.log(`      ✅ Success: ${marketAddr}`);
                     resolvedCount++;
-
                 } catch (rErr: any) {
-                    console.error(`      ❌ Failed to resolve ${marketAddr}:`, rErr.reason || rErr.message || rErr);
-                    // Do not break the loop, continue to the next market
+                    console.error(`      ❌ Error ${marketAddr}:`, rErr.reason || rErr.message);
                 }
             }
         }
 
-        if (resolvedCount === 0) console.log("   No markets needed resolution at this time.");
+        console.log(`   📊 Current: ${activeHourly} Hourly, ${activeDaily} Daily, ${activeWeekly} Weekly active.`);
 
-        // Guarantee that there is always at least 1 active market of each type
-        if (!hasActiveHourly) {
-            console.log(`      🔄 Missing active Hourly market. Auto-creating...`);
+        if (activeHourly === 0) {
+            console.log(`      🔄 No active Hourly market. Triggering...`);
             await runHourly();
         }
-        if (!hasActiveDaily) {
-            console.log(`      🔄 Missing active Daily market. Auto-creating...`);
+        if (activeDaily === 0) {
+            console.log(`      🔄 No active Daily market. Triggering...`);
             await runDaily();
         }
-        if (!hasActiveWeekly) {
-            console.log(`      🔄 Missing active Weekly market. Auto-creating...`);
+        if (activeWeekly === 0) {
+            console.log(`      🔄 No active Weekly market. Triggering...`);
             await runWeekly();
         }
 
     } catch (err) {
-        console.error("❌ Auto-resolve sweep failed:", err);
+        console.error("❌ Sweep failed:", err);
     }
 }
 
@@ -261,84 +258,73 @@ async function resolveMarkets() {
 async function runHourly() {
     console.log(`\n⏰ [HOURLY] ${new Date().toUTCString()}`);
     try {
-        const price = await getLivePrice(); // Use exact frontend API for baseline so question matches UI perfectly
+        const price = await getLivePrice();
         const endTime = nextHourUTC();
-        const bettingEndTime = endTime - 15 * 60;  // close 15 mins early
+        const bettingEndTime = endTime - 15 * 60;
         const label = formatHourUTC(endTime);
         const usd = (Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 });
         const question = `Will BTC/USD be above $${usd} at ${label}?`;
         await createMarket(question, price, endTime, bettingEndTime);
     } catch (err) {
-        console.error("❌ Hourly market failed:", err);
+        console.error("❌ Hourly failed:", err);
     }
 }
 
 async function runDaily() {
     console.log(`\n📅 [DAILY] ${new Date().toUTCString()}`);
     try {
-        const price = await getLivePrice(); // Use exact frontend API
+        const price = await getLivePrice();
         const endTime = nextMidnightUTC();
-        const bettingEndTime = endTime - 12 * 60 * 60; // close 12 hrs early
+        const bettingEndTime = endTime - 12 * 60 * 60;
         const label = formatDateUTC(endTime);
         const usd = (Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 });
         const question = `Will BTC/USD be above $${usd} by midnight ${label}?`;
         await createMarket(question, price, endTime, bettingEndTime);
     } catch (err) {
-        console.error("❌ Daily market failed:", err);
+        console.error("❌ Daily failed:", err);
     }
 }
 
 async function runWeekly() {
     console.log(`\n📅 [WEEKLY] ${new Date().toUTCString()}`);
     try {
-        const price = await getLivePrice(); // Use exact frontend API
+        const price = await getLivePrice();
         const endTime = nextWeekUTC();
-        const bettingEndTime = endTime - 3 * 24 * 60 * 60; // close 3 days early
+        const bettingEndTime = endTime - 3 * 24 * 60 * 60;
         const label = formatDateUTC(endTime);
         const usd = (Number(price) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2 });
         const question = `Will BTC/USD be above $${usd} by ${label}?`;
         await createMarket(question, price, endTime, bettingEndTime);
     } catch (err) {
-        console.error("❌ Weekly market failed:", err);
+        console.error("❌ Weekly failed:", err);
     }
 }
 
 // ── Price History Storage ──────────────────────────────────────────────────
 const PRICES_CSV = path.join(process.cwd(), "price_history.csv");
 
-/** Appends a new price point to the CSV file */
 async function savePriceToHistory(price: bigint) {
     const now = Math.floor(Date.now() / 1000);
     const usd = Number(price) / 1e8;
     const line = `${now},${usd}\n`;
-
     try {
-        if (!fs.existsSync(PRICES_CSV)) {
-            fs.writeFileSync(PRICES_CSV, "timestamp,price\n");
-        }
+        if (!fs.existsSync(PRICES_CSV)) fs.writeFileSync(PRICES_CSV, "timestamp,price\n");
         fs.appendFileSync(PRICES_CSV, line);
-    } catch (err) {
-        console.error("❌ Failed to save price to history:", err);
-    }
+    } catch (err) { }
 }
 
-/** Keeps only the last 24 hours of data in the CSV (approx 86400 lines) */
 async function prunePriceHistory() {
     try {
         if (!fs.existsSync(PRICES_CSV)) return;
         const data = fs.readFileSync(PRICES_CSV, "utf8").split("\n");
         const header = data[0];
         const body = data.slice(1).filter(l => l.trim() !== "");
-
-        const maxLines = 86400; // 24h at 1s intervals
+        const maxLines = 86400;
         if (body.length > maxLines) {
             const pruned = [header, ...body.slice(body.length - maxLines)].join("\n") + "\n";
             fs.writeFileSync(PRICES_CSV, pruned);
-            console.log(`   🧹 Pruned price history to ${maxLines} lines.`);
         }
-    } catch (err) {
-        console.error("❌ Failed to prune price history:", err);
-    }
+    } catch (err) { }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────
@@ -346,35 +332,26 @@ async function prunePriceHistory() {
 async function main() {
     console.log("🚀 Rial Market — Auto-Scheduler starting...");
     console.log(`   Factory  : ${FACTORY_ADDRESS}`);
-    console.log(`   Oracle   : ${ORACLE_ADDRESS}`);
-    console.log(`   Wallet   : ${signer.address}`);
+    console.log(`   Signer   : ${signer.address}`);
 
     const balance = await provider.getBalance(signer.address);
     console.log(`   Balance  : ${ethers.formatEther(balance)} ETH`);
-    console.log("");
 
-    // Sweep on startup to catch missed deadlines during downtime
-    console.log("\n▶️  Running initial resolution sweep on startup...");
+    // Initial resolution
     await resolveMarkets();
 
-    // ── Loop 1: Price Collector (1s)
-    console.log("\n📈 Price collector started: Every 1 second");
+    // Loop 1: Price Collector
     setInterval(async () => {
         try {
-            const price = await getLivePrice(1); // 1 retry only for high frequency
+            const price = await getLivePrice(1);
             await savePriceToHistory(price);
-        } catch (e) {
-            // Silently fail if one fetch fails, next second will retry
-        }
+        } catch (e) { }
     }, 1000);
 
-    // ── Loop 2: History Pruning (1h)
+    // Loop 2: History Pruning
     setInterval(prunePriceHistory, 3600_000);
 
-    // ── Loop 3: Auto-Resolve safely overlapping prevention
-    console.log("\n🔄 Auto-resolve scheduled: Every 30 seconds");
-
-    // Instead of node-cron, use a self-invoking loop to prevent overlap if a sweep takes >30s
+    // Loop 3: Auto-Resolve Loop (30s)
     while (true) {
         await resolveMarkets();
         await new Promise(res => setTimeout(res, 30_000));
