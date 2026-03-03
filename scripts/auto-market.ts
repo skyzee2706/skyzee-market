@@ -9,6 +9,7 @@
  * Schedule (UTC):
  *   Hourly  — at the start of every UTC hour  (cron: "0 * * * *")
  *   Daily   — at midnight UTC every day        (cron: "0 0 * * *")
+ *   Storage — weekly CSV cleanup (Sunday 00:00 UTC)
  *
  * Usage:
  *   npm run auto-market
@@ -327,6 +328,25 @@ async function prunePriceHistory() {
     } catch (err) { }
 }
 
+// ── Storage Maintenance (Weekly Cleanup) ───────────────────────────────────
+
+/**
+ * Clears the CSV history every Sunday at 00:00 UTC
+ */
+function scheduleWeeklyCleanup() {
+    cron.schedule("0 0 * * 0", () => {
+        console.log(`\n🧹 [WEEKLY CLEANUP] Clearing price history CSV (Sunday 00:00 UTC)...`);
+        try {
+            fs.writeFileSync(PRICES_CSV, "timestamp,price\n");
+            console.log(`   ✅ Storage cleared successfully.`);
+        } catch (err) {
+            console.error(`   ❌ Failed to clear storage:`, err);
+        }
+    }, {
+        timezone: "UTC"
+    });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -340,7 +360,7 @@ async function main() {
     // Initial resolution
     await resolveMarkets();
 
-    // Loop 1: Price Collector
+    // Start Price History Collector (1s)
     setInterval(async () => {
         try {
             const price = await getLivePrice(1);
@@ -348,10 +368,14 @@ async function main() {
         } catch (e) { }
     }, 1000);
 
-    // Loop 2: History Pruning
+    // Start History Pruning (1h)
     setInterval(prunePriceHistory, 3600_000);
 
-    // Loop 3: Auto-Resolve Loop (30s)
+    // Start Weekly History Cleanup Job
+    scheduleWeeklyCleanup();
+
+    // Start Auto-Resolve Loop (30s)
+    console.log("\n🔄 Auto-resolve scheduled: Every 30 seconds");
     while (true) {
         await resolveMarkets();
         await new Promise(res => setTimeout(res, 30_000));
