@@ -28,6 +28,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
 
     const actualBettingEndTime = bettingEndTime || (endTime ? endTime - 900 : undefined);
 
+    // We reserve space on the right for the price axis/labels
+    const RIGHT_AXIS_WIDTH = 75;
+
     useEffect(() => {
         if (!containerRef.current) return;
         const observer = new ResizeObserver((entries) => {
@@ -102,15 +105,16 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
         const minScale = midP - buffer;
         const maxScale = midP + buffer;
 
-        // Chart spans full width from edge to edge
-        const getX = (t: number) => ((t - startTime) / (endTime - startTime)) * width;
+        // Map time to width minus the reserved price axis area
+        const availableWidth = width - RIGHT_AXIS_WIDTH;
+        const getX = (t: number) => ((t - startTime) / (endTime - startTime)) * availableWidth;
 
         const paddingY = 70;
-        const chartAreaH = height - paddingY * 2 - 30; // 30 for legend
+        const chartAreaH = height - paddingY * 2 - 40;
         const getY = (p: number) => paddingY + chartAreaH - ((p - minScale) / (maxScale - minScale)) * chartAreaH;
 
-        return { getX, getY, minScale, maxScale, midP, strikeY: getY(midP), chartWidth: width };
-    }, [allPoints, startTime, endTime, width, height, strikePrice]);
+        return { getX, getY, minScale, maxScale, midP, strikeY: getY(midP), availableWidth };
+    }, [allPoints, startTime, endTime, width, height, strikePrice, RIGHT_AXIS_WIDTH]);
 
     const paths = useMemo(() => {
         if (!scale || allPoints.length === 0) return null;
@@ -136,6 +140,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
         const rect = containerRef.current.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
+
+        // Limit interaction to the chart area (not the axis)
+        if (x > scale.availableWidth) return;
 
         let nearest = allPoints[0];
         let minDist = Math.abs(scale.getX(allPoints[0].time) - x);
@@ -214,21 +221,21 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
                         </linearGradient>
 
                         <clipPath id="clipTop">
-                            <rect x="0" y="0" width={width} height={scale.strikeY} />
+                            <rect x="0" y="0" width={scale.availableWidth} height={scale.strikeY} />
                         </clipPath>
                         <clipPath id="clipBottom">
-                            <rect x="0" y={scale.strikeY} width={width} height={height - scale.strikeY} />
+                            <rect x="0" y={scale.strikeY} width={scale.availableWidth} height={height - scale.strikeY} />
                         </clipPath>
                     </defs>
 
-                    {/* Horizontal Grid & Price Labels (Placed over chart now) */}
+                    {/* Horizontal Grid & Price Labels (Axis stays fixed on right padding) */}
                     {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
-                        const y = 70 + f * (height - 170);
+                        const y = 70 + f * (height - 180);
                         const price = scale.maxScale - f * (scale.maxScale - scale.minScale);
                         return (
                             <g key={i}>
-                                <line x1="0" y1={y} x2={width} y2={y} stroke="rgba(255,255,255,0.03)" />
-                                <text x={width - 10} y={y - 4} textAnchor="end" fill="rgba(255,255,255,0.15)" fontSize="9" fontFamily="monospace">
+                                <line x1="0" y1={y} x2={scale.availableWidth} y2={y} stroke="rgba(255,255,255,0.03)" />
+                                <text x={width - 10} y={y + 3} textAnchor="end" fill="rgba(255,255,255,0.15)" fontSize="9" fontFamily="monospace">
                                     {Math.round(price)}
                                 </text>
                             </g>
@@ -242,27 +249,50 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
                         const h = date.getUTCHours().toString().padStart(2, '0');
                         const m = date.getUTCMinutes().toString().padStart(2, '0');
                         return (
-                            <text key={i} x={x} y={height - 40} textAnchor={i === 0 ? "start" : i === 2 ? "end" : "middle"} fill="rgba(255,255,255,0.3)" fontSize="10" fontFamily="monospace">
+                            <text key={i} x={x} y={height - 25} textAnchor={i === 0 ? "start" : i === 2 ? "end" : "middle"} fill="rgba(255,255,255,0.3)" fontSize="10" fontFamily="monospace">
                                 {`${h}:${m}`}
                             </text>
                         );
                     })}
 
-                    {/* Legend Area */}
-                    <line x1="20" y1={height - 20} x2="40" y2={height - 20} stroke="#f59e0b" strokeDasharray="3 3" strokeWidth="1" />
-                    <text x="50" y={height - 16} fill="rgba(255,255,255,0.5)" fontSize="10" fontFamily="monospace" fontWeight="700">BETTING CLOSE TIME</text>
-
                     {/* TARGET PRICE LINE */}
                     <line x1="0" y1={scale.strikeY} x2={width} y2={scale.strikeY} stroke="#00ccff" strokeDasharray="4 4" strokeWidth="1" />
-                    <rect x={width - 75} y={scale.strikeY - 10} width="75" height="20" fill="#00ccff" />
-                    <text x={width - 37} y={scale.strikeY + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="950" fontFamily="monospace">
+                    <rect x={width - 65} y={scale.strikeY - 7} width="65" height="14" fill="#00ccff" rx="2" />
+                    <text x={width - 32} y={scale.strikeY + 3} textAnchor="middle" fill="#000" fontSize="8.5" fontWeight="950" fontFamily="monospace">
                         {strikePrice?.toFixed(2)}
                     </text>
-                    <text x={width - 7} y={scale.strikeY - 15} textAnchor="end" fill="#00ccff" fontSize="9" fontWeight="800">Target</text>
+                    <text x={width - 7} y={scale.strikeY - 11} textAnchor="end" fill="#00ccff" fontSize="8" fontWeight="800">Target</text>
 
-                    {/* Vertical Markers */}
+                    {/* Vertical Betting Closes Marker */}
                     {actualBettingEndTime && (
-                        <line x1={scale.getX(actualBettingEndTime)} y1="0" x2={scale.getX(actualBettingEndTime)} y2={height - 60} stroke="rgba(245, 158, 11, 0.4)" strokeDasharray="3 3" />
+                        <g>
+                            <line x1={scale.getX(actualBettingEndTime)} y1="0" x2={scale.getX(actualBettingEndTime)} y2={height - 60} stroke="rgba(245, 158, 11, 0.4)" strokeDasharray="3 3" />
+                            <text
+                                x={scale.getX(actualBettingEndTime)}
+                                y={height - 45}
+                                textAnchor="middle"
+                                fill="#f59e0b"
+                                fontSize="10"
+                                fontFamily="monospace"
+                                fontWeight="700"
+                            >
+                                {(() => {
+                                    const d = new Date(actualBettingEndTime * 1000);
+                                    return `${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
+                                })()}
+                            </text>
+                            <text
+                                x={scale.getX(actualBettingEndTime)}
+                                y={height - 35}
+                                textAnchor="middle"
+                                fill="rgba(245, 158, 11, 0.6)"
+                                fontSize="8"
+                                fontFamily="sans-serif"
+                                fontWeight="900"
+                            >
+                                BETTING CLOSE TIME
+                            </text>
+                        </g>
                     )}
 
                     {/* Price Line Rendering */}
@@ -284,8 +314,8 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
 
                             {/* Current Price Dot & Label */}
                             <circle cx={paths.lastX} cy={paths.lastY} r="3" fill={isAbove ? "#9cfc0d" : "#ff375f"} stroke="#fff" strokeWidth="1" />
-                            <rect x={width - 75} y={paths.lastY - 10} width="75" height="20" fill={isAbove ? "#9cfc0d" : "#ff375f"} />
-                            <text x={width - 37} y={paths.lastY + 4} textAnchor="middle" fill="#000" fontSize="10" fontWeight="950" fontFamily="monospace">
+                            <rect x={width - 65} y={paths.lastY - 7} width="65" height="14" fill={isAbove ? "#9cfc0d" : "#ff375f"} rx="2" />
+                            <text x={width - 32} y={paths.lastY + 3} textAnchor="middle" fill="#000" fontSize="8.5" fontWeight="950" fontFamily="monospace">
                                 {livePrice?.toFixed(2)}
                             </text>
                         </>
@@ -301,7 +331,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
                             />
                             <line
                                 x1="0" y1={scale.getY(hoverPoint.value)}
-                                x2={width} y2={scale.getY(hoverPoint.value)}
+                                x2={scale.availableWidth} y2={scale.getY(hoverPoint.value)}
                                 stroke="rgba(255,255,255,0.3)" strokeDasharray="4 4" strokeWidth="1"
                             />
 
