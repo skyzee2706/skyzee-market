@@ -15,5 +15,4 @@ deploy_log.txt
 compile_log.txt
 addr.txt
 *.log
-price_history.csv
 *.har

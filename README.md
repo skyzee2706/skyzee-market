@@ -1,4 +1,4 @@
-# Skyzee Market — Web3 Prediction Market dApp
+# Sky Market — Web3 Prediction Market dApp
 
 > A Polymarket-inspired decentralized prediction market running on the Ethereum Sepolia testnet.  
 > Built with Solidity 0.8.20, Chainlink Oracles, Next.js 14, wagmi v2, viem, and RainbowKit.
