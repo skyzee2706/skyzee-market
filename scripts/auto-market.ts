@@ -3,7 +3,7 @@
  * ───────────────────────────────────────────────────────────────────────────
  * Rial Market — Auto-scheduler for hourly and daily BTC/USD prediction markets
  *
- * Reads the live BTC/USD price from 12 top sources (Pyth, Binance, Bybit, etc.),
+ * Reads the live BTC/USD price from 10 standardized CEX sources (Binance, Bybit, etc.),
  * then calls MarketFactory.createMarket() with the median price.
  * 
  * Logic is unified with the frontend API for absolute 100% price consistency.
@@ -42,7 +42,7 @@ const MARKET_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// ── Price Engine (12 Unified Sources) ────────────────────────────────────
+// ── Price Engine (10 Unified CEX Sources) ────────────────────────────────
 
 async function getLivePrice(retries = 3): Promise<bigint> {
     const timeout = 2500;
@@ -51,32 +51,17 @@ async function getLivePrice(retries = 3): Promise<bigint> {
             const prices: number[] = [];
             const fetch = async (url: string) => axios.get(url, { timeout });
 
-            // Concurrent fetching for speed and efficiency
             const results = await Promise.allSettled([
-                // 1. Pyth
-                fetch("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43").then(r => Number(r.data.parsed[0].price.price) * Math.pow(10, r.data.parsed[0].price.expo)),
-                // 2. Binance
                 fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT").then(r => Number(r.data.price)),
-                // 3. Bybit
                 fetch("https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT").then(r => Number(r.data.result.list[0].lastPrice)),
-                // 4. MEXC
                 fetch("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT").then(r => Number(r.data.price)),
-                // 5. KuCoin
                 fetch("https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT").then(r => Number(r.data.data.price)),
-                // 6. Gate.io
                 fetch("https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT").then(r => Number(r.data[0].last)),
-                // 7. Bitget
                 fetch("https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTCUSDT").then(r => Number(r.data.data[0].lastPr)),
-                // 8. HTX
                 fetch("https://api.huobi.pro/market/trade?symbol=btcusdt").then(r => Number(r.data.tick.data[0].price)),
-                // 9. OKX
                 fetch("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT").then(r => Number(r.data.data[0].last)),
-                // 10. Bitmart
                 fetch("https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol=BTC_USDT").then(r => Number(r.data.data.last)),
-                // 11. DigiFinex
-                fetch("https://openapi.digifinex.com/v3/spot/ticker?symbol=BTC_USDT").then(r => Number(r.data.ticker[0].last)),
-                // 12. CoinGecko
-                fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd").then(r => Number(r.data.bitcoin.usd))
+                fetch("https://openapi.digifinex.com/v3/spot/ticker?symbol=BTC_USDT").then(r => Number(r.data.ticker[0].last))
             ]);
 
             results.forEach(res => {
@@ -124,7 +109,7 @@ const formatDate = (ts: number) => new Date(ts * 1000).toISOString().split("T")[
 
 async function resolveMarkets() {
     try {
-        console.log(`\n🔍 [AUTO-RESOLVE] Syncing 12 sources...`);
+        console.log(`\n🔍 [AUTO-RESOLVE] Syncing 10 CEX sources...`);
         const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
         const all = await factory.getAllMarkets();
         const recent = all.slice(-50);
@@ -153,7 +138,7 @@ async function resolveMarkets() {
 
         console.log(`   📊 Active: ${counts.H}H, ${counts.D}D, ${counts.W}W`);
 
-        // Market Creation Logic
+        // Market Creation Logic (Strike Price from the same 10 sources)
         if (counts.H === 0) {
             const p = await getLivePrice();
             const et = nextHourUTC();
@@ -180,7 +165,7 @@ async function resolveMarkets() {
 }
 
 async function main() {
-    console.log("🚀 Rial Market Unified 12-Source Bot Starting...");
+    console.log("🚀 Rial Market Unified 10-CEX Bot Starting...");
     await resolveMarkets();
     setInterval(resolveMarkets, 30_000);
 }
