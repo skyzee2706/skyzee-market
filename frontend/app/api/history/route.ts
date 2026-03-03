@@ -3,8 +3,8 @@ import { NextResponse } from 'next/server';
 export const revalidate = 0;
 
 /**
- * BTC/USD History API - 10+ Source Median Engine
- * Fetches 1-minute klines from multiple CEXs and calculates the median 
+ * BTC/USD History API - 10-Source Median Engine
+ * Fetches 1-minute klines from 10 major exchanges and calculates the median 
  * for each minute to ensure 100% resilience and accuracy.
  */
 export async function GET() {
@@ -53,17 +53,28 @@ export async function GET() {
                 const data = await res.json();
                 return data.data.map((k: any) => ({ t: k.id, v: k.close }));
             },
-            // 8. Bitmart
+            // 8. OKX
+            async () => {
+                const res = await fetch(`https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1m&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
+                const data = await res.json();
+                return data.data.map((k: any) => ({ t: Math.floor(parseInt(k[0]) / 1000), v: parseFloat(k[4]) }));
+            },
+            // 9. Bitmart
             async () => {
                 const res = await fetch(`https://api-cloud.bitmart.com/spot/quotation/v3/klines?symbol=BTC_USDT&before=${Math.floor(Date.now() / 1000)}&after=${Math.floor(Date.now() / 1000) - 7200}&step=1`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
                 const data = await res.json();
                 return data.data.map((k: any) => ({ t: parseInt(k[0]), v: parseFloat(k[4]) }));
+            },
+            // 10. Digifinex
+            async () => {
+                const res = await fetch(`https://openapi.digifinex.com/v3/spot/kline?symbol=BTC_USDT&period=1&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
+                const data = await res.json();
+                return data.data.map((k: any) => ({ t: k[0], v: k[4] }));
             }
         ];
 
         const results = await Promise.allSettled(fetchers.map(f => f()));
 
-        // Map: { [timestamp]: number[] }
         const priceGroups: Record<number, number[]> = {};
 
         results.forEach(res => {
@@ -76,7 +87,6 @@ export async function GET() {
             }
         });
 
-        // Calculate median for each timestamp
         const sortedTimestamps = Object.keys(priceGroups).map(Number).sort((a, b) => a - b);
         const history = sortedTimestamps.map(t => {
             const vals = priceGroups[t];
@@ -86,12 +96,11 @@ export async function GET() {
             return { time: t, value: medianPrice };
         });
 
-        // Filter out extreme outliers or keep the last ~100 points
         const finalHistory = history.slice(-limit);
 
         return NextResponse.json({
             history: finalHistory,
-            source: "multi_source_median",
+            source: "unified_10_source_median",
             sources_count: results.filter(r => r.status === 'fulfilled').length,
             timestamp: Math.floor(Date.now() / 1000)
         });

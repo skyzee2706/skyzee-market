@@ -3,19 +3,10 @@
  * ───────────────────────────────────────────────────────────────────────────
  * Rial Market — Auto-scheduler for hourly and daily BTC/USD prediction markets
  *
- * Reads the live BTC/USD price from 10 top public sources (Binance, Pyth, MEXC, OKX, etc.),
+ * Reads the live BTC/USD price from 12 top sources (Pyth, Binance, Bybit, etc.),
  * then calls MarketFactory.createMarket() with the median price.
  * 
- * Logic is unified with the frontend API to ensure 100% price consistency.
- *
- * Schedule (UTC):
- *   Hourly  — at the start of every UTC hour
- *   Daily   — at midnight UTC every day
- *   Weekly  — every Sunday morning
- *
- * Usage:
- *   npm run auto-market
- * ───────────────────────────────────────────────────────────────────────────
+ * Logic is unified with the frontend API for absolute 100% price consistency.
  */
 
 import * as dotenv from "dotenv";
@@ -51,103 +42,48 @@ const MARKET_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-function nextHourUTC(): number {
-    const now = new Date();
-    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours() + 1, 0, 0, 0));
-    return Math.floor(next.getTime() / 1000);
-}
-
-function nextMidnightUTC(): number {
-    const now = new Date();
-    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
-    return Math.floor(next.getTime() / 1000);
-}
-
-function nextWeekUTC(): number {
-    const now = new Date();
-    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 7, 0, 0, 0, 0));
-    return Math.floor(next.getTime() / 1000);
-}
-
-function formatHourUTC(ts: number): string {
-    const d = new Date(ts * 1000);
-    return `${String(d.getUTCHours()).padStart(2, "0")}:00 UTC`;
-}
-
-function formatDateUTC(ts: number): string {
-    const d = new Date(ts * 1000);
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} UTC`;
-}
-
-// ── Unified Price Engine (10+ Sources) ───────────────────────────────────
+// ── Price Engine (12 Unified Sources) ────────────────────────────────────
 
 async function getLivePrice(retries = 3): Promise<bigint> {
     const timeout = 2500;
     for (let i = 0; i < retries; i++) {
         try {
             const prices: number[] = [];
+            const fetch = async (url: string) => axios.get(url, { timeout });
 
-            // 1. Pyth (Hermes)
-            try {
-                const res = await axios.get("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43", { timeout });
-                prices.push(Number(res.data.parsed[0].price.price) * Math.pow(10, res.data.parsed[0].price.expo));
-            } catch (e) { }
+            // Concurrent fetching for speed and efficiency
+            const results = await Promise.allSettled([
+                // 1. Pyth
+                fetch("https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43").then(r => Number(r.data.parsed[0].price.price) * Math.pow(10, r.data.parsed[0].price.expo)),
+                // 2. Binance
+                fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT").then(r => Number(r.data.price)),
+                // 3. Bybit
+                fetch("https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT").then(r => Number(r.data.result.list[0].lastPrice)),
+                // 4. MEXC
+                fetch("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT").then(r => Number(r.data.price)),
+                // 5. KuCoin
+                fetch("https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT").then(r => Number(r.data.data.price)),
+                // 6. Gate.io
+                fetch("https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT").then(r => Number(r.data[0].last)),
+                // 7. Bitget
+                fetch("https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTCUSDT").then(r => Number(r.data.data[0].lastPr)),
+                // 8. HTX
+                fetch("https://api.huobi.pro/market/trade?symbol=btcusdt").then(r => Number(r.data.tick.data[0].price)),
+                // 9. OKX
+                fetch("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT").then(r => Number(r.data.data[0].last)),
+                // 10. Bitmart
+                fetch("https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol=BTC_USDT").then(r => Number(r.data.data.last)),
+                // 11. DigiFinex
+                fetch("https://openapi.digifinex.com/v3/spot/ticker?symbol=BTC_USDT").then(r => Number(r.data.ticker[0].last)),
+                // 12. CoinGecko
+                fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd").then(r => Number(r.data.bitcoin.usd))
+            ]);
 
-            // 2. Binance
-            try {
-                const res = await axios.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", { timeout });
-                prices.push(Number(res.data.price));
-            } catch (e) { }
-
-            // 3. Bybit
-            try {
-                const res = await axios.get("https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT", { timeout });
-                prices.push(Number(res.data.result.list[0].lastPrice));
-            } catch (e) { }
-
-            // 4. MEXC
-            try {
-                const res = await axios.get("https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT", { timeout });
-                prices.push(Number(res.data.price));
-            } catch (e) { }
-
-            // 5. KuCoin
-            try {
-                const res = await axios.get("https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT", { timeout });
-                prices.push(Number(res.data.data.price));
-            } catch (e) { }
-
-            // 6. Gate.io
-            try {
-                const res = await axios.get("https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT", { timeout });
-                prices.push(Number(res.data[0].last));
-            } catch (e) { }
-
-            // 7. Bitget
-            try {
-                const res = await axios.get("https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTCUSDT", { timeout });
-                prices.push(Number(res.data.data[0].lastPr));
-            } catch (e) { }
-
-            // 8. HTX
-            try {
-                const res = await axios.get("https://api.huobi.pro/market/trade?symbol=btcusdt", { timeout });
-                prices.push(Number(res.data.tick.data[0].price));
-            } catch (e) { }
-
-            // 9. OKX
-            try {
-                const res = await axios.get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", { timeout });
-                prices.push(Number(res.data.data[0].last));
-            } catch (e) { }
-
-            // 10. CoinGecko
-            try {
-                const res = await axios.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", { timeout });
-                prices.push(Number(res.data.bitcoin.usd));
-            } catch (e) { }
+            results.forEach(res => {
+                if (res.status === 'fulfilled' && res.value && res.value > 10000) {
+                    prices.push(res.value);
+                }
+            });
 
             if (prices.length < 3) throw new Error("Not enough sources.");
 
@@ -166,25 +102,37 @@ async function getLivePrice(retries = 3): Promise<bigint> {
 
 // ── Market Actions ────────────────────────────────────────────────────────
 
-async function createMarket(question: string, strikePrice: bigint, endTime: number, bettingEndTime: number) {
-    const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
-    console.log(`\n📝 Creating: ${question}`);
-    const tx = await factory.createMarket(question, strikePrice, endTime, bettingEndTime);
-    await tx.wait();
-    console.log(`   ✅ Success: BTC/USD @ $${(Number(strikePrice) / 1e8).toFixed(2)}`);
+function nextHourUTC() {
+    const d = new Date();
+    d.setUTCHours(d.getUTCHours() + 1, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
 }
+function nextMidnightUTC() {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + 1);
+    d.setUTCHours(0, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+}
+function nextWeekUTC() {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + 7);
+    d.setUTCHours(0, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+}
+const formatHour = (ts: number) => `${new Date(ts * 1000).getUTCHours().toString().padStart(2, "0")}:00 UTC`;
+const formatDate = (ts: number) => new Date(ts * 1000).toISOString().split("T")[0];
 
 async function resolveMarkets() {
     try {
-        console.log(`\n🔍 [SWEEP] Checking recent markets...`);
+        console.log(`\n🔍 [AUTO-RESOLVE] Syncing 12 sources...`);
         const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
-        const allMarkets = await factory.getAllMarkets();
-        const recentMarkets = allMarkets.slice(-50);
+        const all = await factory.getAllMarkets();
+        const recent = all.slice(-50);
         const now = Math.floor(Date.now() / 1000);
 
         let counts = { H: 0, D: 0, W: 0 };
 
-        for (const addr of recentMarkets) {
+        for (const addr of recent) {
             const m = new ethers.Contract(addr, MARKET_ABI, signer);
             const [endTime, resolved, question] = await Promise.all([m.endTime(), m.resolved(), m.question()]);
 
@@ -205,30 +153,34 @@ async function resolveMarkets() {
 
         console.log(`   📊 Active: ${counts.H}H, ${counts.D}D, ${counts.W}W`);
 
+        // Market Creation Logic
         if (counts.H === 0) {
             const p = await getLivePrice();
             const et = nextHourUTC();
-            const bt = et - 900;
-            await createMarket(`Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} at ${formatHourUTC(et)}?`, p, et, bt);
+            const q = `Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} at ${formatHour(et)}?`;
+            await (await new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer)).createMarket(q, p, et, et - 900).then((t: any) => t.wait());
+            console.log(`   ✅ Created Hourly`);
         }
         if (counts.D === 0) {
             const p = await getLivePrice();
             const et = nextMidnightUTC();
-            const bt = et - 43200;
-            await createMarket(`Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} by midnight ${formatDateUTC(et)}?`, p, et, bt);
+            const q = `Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} by midnight ${formatDate(et)}?`;
+            await (await new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer)).createMarket(q, p, et, et - 43200).then((t: any) => t.wait());
+            console.log(`   ✅ Created Daily`);
         }
         if (counts.W === 0) {
             const p = await getLivePrice();
             const et = nextWeekUTC();
-            const bt = et - 259200;
-            await createMarket(`Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} by ${formatDateUTC(et)}?`, p, et, bt);
+            const q = `Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} by ${formatDate(et)}?`;
+            await (await new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer)).createMarket(q, p, et, et - 259200).then((t: any) => t.wait());
+            console.log(`   ✅ Created Weekly`);
         }
 
-    } catch (err) { console.error("❌ Sweep failed:", err); }
+    } catch (err) { console.error("❌ Sweep failure:", err); }
 }
 
 async function main() {
-    console.log("🚀 Rial Market Unified 10-Source Bot Starting...");
+    console.log("🚀 Rial Market Unified 12-Source Bot Starting...");
     await resolveMarkets();
     setInterval(resolveMarkets, 30_000);
 }
