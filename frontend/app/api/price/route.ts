@@ -76,8 +76,9 @@ export async function GET() {
         // Calculate Median
         prices.sort((a, b) => a - b);
         const mid = Math.floor(prices.length / 2);
-        const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (vals: any) => (prices[mid - 1] + prices[mid]) / 2;
-        const finalPrice = typeof medianPrice === 'function' ? medianPrice() : medianPrice;
+        const finalPrice = prices.length % 2 !== 0
+            ? prices[mid]
+            : (prices[mid - 1] + prices[mid]) / 2;
 
         return NextResponse.json({
             price: finalPrice,
