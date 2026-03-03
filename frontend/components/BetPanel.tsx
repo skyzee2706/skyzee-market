@@ -47,9 +47,10 @@ export function BetPanel({ address, marketInfo, yesBet, noBet, claimed, onSucces
     const yesPct = Number(yesPrice) / 1e16;
     const noPct = 100 - yesPct;
     const now = Date.now() / 1000;
-    const bettingOpen = !resolved && Number(bettingEndTime) > now;
-    const pendingSettlement = !resolved && Number(bettingEndTime) <= now && Number(endTime) > now;
-    const isLive = bettingOpen; // alias used by downstream logic
+    const bettingOpen = !resolved && now <= Number(bettingEndTime);
+    const bettingClosed = !resolved && now > Number(bettingEndTime) && now <= Number(endTime);
+    const pendingResolution = !resolved && now > Number(endTime);
+    const isLive = bettingOpen;
 
     const amountWei = amount ? parseUnits(amount as `${number}`, USDT_DECIMALS) : 0n;
     const needsApproval = amountWei > 0n && allowance < amountWei;
@@ -99,7 +100,7 @@ export function BetPanel({ address, marketInfo, yesBet, noBet, claimed, onSucces
             <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "20px", padding: "24px", position: "sticky", top: "80px" }}>
                 {/* Title */}
                 <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)", marginBottom: "20px" }}>
-                    {resolved ? "Market Settled" : pendingSettlement ? "⏸ Pending Settlement" : "Place a Bet"}
+                    {resolved ? "Market Settled" : pendingResolution ? "⌛ Pending Resolving" : bettingClosed ? "⏸ Bet Closed" : "Place a Bet"}
                 </h3>
 
                 {/* Odds bars */}
@@ -134,13 +135,24 @@ export function BetPanel({ address, marketInfo, yesBet, noBet, claimed, onSucces
                     </button>
                 )}
 
-                {/* Pending Settlement Banner */}
-                {pendingSettlement && (
+                {/* Bet Closed Banner */}
+                {bettingClosed && (
                     <div style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: "10px", padding: "12px", textAlign: "center", marginBottom: "16px" }}>
-                        <span style={{ fontSize: "20px" }}>⏳</span>
-                        <p style={{ marginTop: "6px", fontWeight: 700, color: "#f59e0b", fontSize: "14px" }}>Betting Closed</p>
+                        <span style={{ fontSize: "20px" }}>⏸</span>
+                        <p style={{ marginTop: "6px", fontWeight: 700, color: "#f59e0b", fontSize: "14px" }}>Bet Closed</p>
                         <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
-                            Awaiting settlement at {new Date(Number(endTime) * 1000).toUTCString()}
+                            Wait for end time to resolving
+                        </p>
+                    </div>
+                )}
+
+                {/* Pending Resolving Banner */}
+                {pendingResolution && (
+                    <div style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.3)", borderRadius: "10px", padding: "12px", textAlign: "center", marginBottom: "16px" }}>
+                        <span style={{ fontSize: "20px" }}>⌛</span>
+                        <p style={{ marginTop: "6px", fontWeight: 700, color: "var(--accent-blue)", fontSize: "14px" }}>Pending Resolving</p>
+                        <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
+                            Market has ended. Waiting for bot to snapshot price.
                         </p>
                     </div>
                 )}

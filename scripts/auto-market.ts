@@ -3,10 +3,8 @@
  * ───────────────────────────────────────────────────────────────────────────
  * Rial Market — Auto-scheduler for hourly and daily BTC/USD prediction markets
  *
- * Reads the live BTC/USD price from 10 standardized CEX sources (Binance, Bybit, etc.),
- * then calls MarketFactory.createMarket() with the median price.
- * 
- * Logic is unified with the frontend API for absolute 100% price consistency.
+ * This version uses a unified 10-CEX median engine for both Live Prices and
+ * Historical Snapshots (for accurate market settlement).
  */
 
 import * as dotenv from "dotenv";
@@ -42,7 +40,7 @@ const MARKET_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// ── Price Engine (10 Unified CEX Sources) ────────────────────────────────
+// ── Unified 10-CEX Price Engine ──────────────────────────────────────────
 
 async function getLivePrice(retries = 3): Promise<bigint> {
     const timeout = 2500;
@@ -65,13 +63,10 @@ async function getLivePrice(retries = 3): Promise<bigint> {
             ]);
 
             results.forEach(res => {
-                if (res.status === 'fulfilled' && res.value && res.value > 10000) {
-                    prices.push(res.value);
-                }
+                if (res.status === 'fulfilled' && res.value && res.value > 10000) prices.push(res.value);
             });
 
             if (prices.length < 3) throw new Error("Not enough sources.");
-
             prices.sort((a, b) => a - b);
             const mid = Math.floor(prices.length / 2);
             const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
@@ -85,7 +80,73 @@ async function getLivePrice(retries = 3): Promise<bigint> {
     return 0n;
 }
 
+/** 
+ * Fetches the median price at a specific historical timestamp (UTC seconds).
+ * Uses 1-minute klines from multiple sources to find the exact candle.
+ */
+async function getHistoricalPrice(targetTs: number): Promise<bigint> {
+    const timeout = 4000;
+    // Round to the minute start
+    const minuteStart = Math.floor(targetTs / 60) * 60;
+    console.log(`      📡 Fetching snapshot for ${new Date(targetTs * 1000).toUTCString()} (Minute: ${minuteStart})`);
+
+    const fetchers = [
+        // 1. Binance
+        async () => {
+            const res = await axios.get(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime=${minuteStart * 1000}&limit=1`, { timeout });
+            return parseFloat(res.data[0][4]);
+        },
+        // 2. MEXC
+        async () => {
+            const res = await axios.get(`https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime=${minuteStart * 1000}&limit=1`, { timeout });
+            return parseFloat(res.data[0][4]);
+        },
+        // 3. Bybit
+        async () => {
+            const res = await axios.get(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=1&startTime=${minuteStart * 1000}&limit=1`, { timeout });
+            return parseFloat(res.data.result.list[0][4]);
+        },
+        // 4. KuCoin
+        async () => {
+            // KuCoin uses startAt/endAt seconds
+            const res = await axios.get(`https://api.kucoin.com/api/v1/market/candles?symbol=BTC-USDT&type=1min&startAt=${minuteStart}&endAt=${minuteStart + 65}`, { timeout });
+            return parseFloat(res.data.data[0][2]);
+        },
+        // 5. Gate.io
+        async () => {
+            const res = await axios.get(`https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=1m&from=${minuteStart}`, { timeout });
+            return parseFloat(res.data[0][2]);
+        },
+        // 6. Bitget
+        async () => {
+            const res = await axios.get(`https://api.bitget.com/api/v2/spot/market/history-candles?symbol=BTCUSDT&granularity=1min&startTime=${minuteStart * 1000}&limit=1`, { timeout });
+            return parseFloat(res.data[0][4]);
+        }
+    ];
+
+    const results = await Promise.allSettled(fetchers.map(f => f()));
+    const prices: number[] = [];
+
+    results.forEach(res => {
+        if (res.status === 'fulfilled' && res.value && res.value > 10000) prices.push(res.value);
+    });
+
+    if (prices.length === 0) {
+        console.warn("      ⚠️ Historical CEX fail, falling back to live as proxy...");
+        return await getLivePrice();
+    }
+
+    prices.sort((a, b) => a - b);
+    const mid = Math.floor(prices.length / 2);
+    const medianPrice = prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+
+    return BigInt(Math.floor(medianPrice * 1e8));
+}
+
 // ── Market Actions ────────────────────────────────────────────────────────
+
+const formatHour = (ts: number) => `${new Date(ts * 1000).getUTCHours().toString().padStart(2, "0")}:00 UTC`;
+const formatDate = (ts: number) => new Date(ts * 1000).toISOString().split("T")[0];
 
 function nextHourUTC() {
     const d = new Date();
@@ -104,69 +165,75 @@ function nextWeekUTC() {
     d.setUTCHours(0, 0, 0, 0);
     return Math.floor(d.getTime() / 1000);
 }
-const formatHour = (ts: number) => `${new Date(ts * 1000).getUTCHours().toString().padStart(2, "0")}:00 UTC`;
-const formatDate = (ts: number) => new Date(ts * 1000).toISOString().split("T")[0];
 
 async function resolveMarkets() {
     try {
-        console.log(`\n🔍 [AUTO-RESOLVE] Syncing 10 CEX sources...`);
+        console.log(`\n🔍 [SWEEP] Scaling 10 CEX sources...`);
         const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
         const all = await factory.getAllMarkets();
-        const recent = all.slice(-50);
+        const recent = all.slice(-40); // scan last 40 markets
         const now = Math.floor(Date.now() / 1000);
 
-        let counts = { H: 0, D: 0, W: 0 };
+        let activeCount = { H: 0, D: 0, W: 0 };
+        let resolvedInThisSweep = false;
 
         for (const addr of recent) {
             const m = new ethers.Contract(addr, MARKET_ABI, signer);
             const [endTime, resolved, question] = await Promise.all([m.endTime(), m.resolved(), m.question()]);
 
+            const tsType = question.includes(" at ") ? "H" : question.includes(" midnight ") ? "D" : "W";
+
             if (!resolved && now >= Number(endTime)) {
                 console.log(`   ⚡ Settling: ${question}`);
                 try {
-                    const price = await getLivePrice();
+                    // USE HISTORICAL SNAPSHOT
+                    const price = await getHistoricalPrice(Number(endTime));
                     const tx = await m.resolveWithCustomPrice(price);
                     await tx.wait();
-                    console.log(`      ✅ Settled @ $${(Number(price) / 1e8).toFixed(2)}`);
-                } catch (e: any) { console.error(`      ❌ Error:`, e.message); }
+                    console.log(`      ✅ Settled @ $${(Number(price) / 1e8).toFixed(2)} [Snapshot]`);
+                    resolvedInThisSweep = true;
+                } catch (e: any) { console.error(`      ❌ Settle Error:`, e.message); }
             } else if (!resolved) {
-                if (question.includes(" at ")) counts.H++;
-                else if (question.includes(" midnight ")) counts.D++;
-                else counts.W++;
+                activeCount[tsType]++;
             }
         }
 
-        console.log(`   📊 Active: ${counts.H}H, ${counts.D}D, ${counts.W}W`);
+        console.log(`   📊 Active: ${activeCount.H}H, ${activeCount.D}D, ${activeCount.W}W`);
 
-        // Market Creation Logic (Strike Price from the same 10 sources)
-        if (counts.H === 0) {
+        // Market Re-creation if resolved or missing
+        if (activeCount.H === 0) {
             const p = await getLivePrice();
             const et = nextHourUTC();
             const q = `Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} at ${formatHour(et)}?`;
-            await (await new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer)).createMarket(q, p, et, et - 900).then((t: any) => t.wait());
-            console.log(`   ✅ Created Hourly`);
+            console.log(`   🆕 Creating Hourly...`);
+            await factory.createMarket(q, p, et, et - 900).then((t: any) => t.wait());
         }
-        if (counts.D === 0) {
+        if (activeCount.D === 0) {
             const p = await getLivePrice();
             const et = nextMidnightUTC();
             const q = `Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} by midnight ${formatDate(et)}?`;
-            await (await new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer)).createMarket(q, p, et, et - 43200).then((t: any) => t.wait());
-            console.log(`   ✅ Created Daily`);
+            console.log(`   🆕 Creating Daily...`);
+            await factory.createMarket(q, p, et, et - 43200).then((t: any) => t.wait());
         }
-        if (counts.W === 0) {
+        if (activeCount.W === 0) {
             const p = await getLivePrice();
             const et = nextWeekUTC();
             const q = `Will BTC/USD be above $${(Number(p) / 1e8).toLocaleString()} by ${formatDate(et)}?`;
-            await (await new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer)).createMarket(q, p, et, et - 259200).then((t: any) => t.wait());
-            console.log(`   ✅ Created Weekly`);
+            console.log(`   🆕 Creating Weekly...`);
+            await factory.createMarket(q, p, et, et - 259200).then((t: any) => t.wait());
         }
 
     } catch (err) { console.error("❌ Sweep failure:", err); }
 }
 
 async function main() {
-    console.log("🚀 Rial Market Unified 10-CEX Bot Starting...");
+    console.log("🚀 Rial Market Unified Snapshot Bot Starting...");
+    console.log(`   Signer: ${signer.address}`);
+
+    // Initial sweep
     await resolveMarkets();
+
+    // Regular interval
     setInterval(resolveMarkets, 30_000);
 }
 
