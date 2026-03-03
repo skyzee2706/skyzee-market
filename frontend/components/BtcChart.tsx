@@ -164,9 +164,9 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
         setMousePos(null);
     }, []);
 
-    const isAbove = livePrice !== null && strikePrice !== null && livePrice > strikePrice;
-
     if (!startTime || !endTime || !strikePrice) return null;
+
+    const isAbove = livePrice !== null && strikePrice !== undefined && livePrice > strikePrice;
 
     return (
         <div ref={containerRef} style={{
