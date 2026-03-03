@@ -86,7 +86,8 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
     const allPoints = useMemo(() => {
         const points = [...history];
         const now = Math.floor(Date.now() / 1000);
-        if (livePrice && (!points.length || now > points[points.length - 1].time) && startTime && now <= endTime!) {
+        // Ensure we have a valid startTime to compare against
+        if (livePrice && (!points.length || now > points[points.length - 1].time) && startTime && now <= (endTime || now + 1)) {
             points.push({ time: now, value: livePrice });
         }
         return points;
