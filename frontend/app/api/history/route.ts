@@ -1,76 +1,61 @@
 import { NextResponse } from 'next/server';
+import ccxt from 'ccxt';
 
 export const revalidate = 0;
 
-/**
- * BTC/USD History API - 10-CEX Unified Median Engine
- * Standardized 10 sources used for History, Live Price, and Settlement.
- */
-export async function GET() {
-    try {
-        const limit = 100;
-        const fetchers = [
-            async () => { // 1. Binance
-                const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.map((k: any) => ({ t: Math.floor(k[0] / 1000), v: parseFloat(k[4]) }));
-            },
-            async () => { // 2. Bybit
-                const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=1&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.result.list.map((k: any) => ({ t: Math.floor(parseInt(k[0]) / 1000), v: parseFloat(k[4]) }));
-            },
-            async () => { // 3. MEXC
-                const res = await fetch(`https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.map((k: any) => ({ t: Math.floor(k[0] / 1000), v: parseFloat(k[4]) }));
-            },
-            async () => { // 4. KuCoin
-                const res = await fetch(`https://api.kucoin.com/api/v1/market/candles?symbol=BTC-USDT&type=1min&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.data.map((k: any) => ({ t: parseInt(k[0]), v: parseFloat(k[2]) }));
-            },
-            async () => { // 5. Gate.io
-                const res = await fetch(`https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=1m&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.map((k: any) => ({ t: parseInt(k[0]), v: parseFloat(k[2]) }));
-            },
-            async () => { // 6. Bitget
-                const res = await fetch(`https://api.bitget.com/api/v2/spot/market/history-candles?symbol=BTCUSDT&granularity=1min&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.data.map((k: any) => ({ t: Math.floor(parseInt(k[0]) / 1000), v: parseFloat(k[4]) }));
-            },
-            async () => { // 7. HTX (Huobi)
-                const res = await fetch(`https://api.huobi.pro/market/history/kline?symbol=btcusdt&period=1min&size=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.data.map((k: any) => ({ t: k.id, v: k.close }));
-            },
-            async () => { // 8. OKX
-                const res = await fetch(`https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=1m&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.data.map((k: any) => ({ t: Math.floor(parseInt(k[0]) / 1000), v: parseFloat(k[4]) }));
-            },
-            async () => { // 9. Bitmart
-                const res = await fetch(`https://api-cloud.bitmart.com/spot/quotation/v3/klines?symbol=BTC_USDT&before=${Math.floor(Date.now() / 1000)}&after=${Math.floor(Date.now() / 1000) - 7200}&step=1`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.data.map((k: any) => ({ t: parseInt(k[0]), v: parseFloat(k[4]) }));
-            },
-            async () => { // 10. DigiFinex
-                const res = await fetch(`https://openapi.digifinex.com/v3/spot/kline?symbol=BTC_USDT&period=1&limit=${limit}`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
-                const data = await res.json();
-                return data.data.map((k: any) => ({ t: k[0], v: k[4] }));
-            }
-        ];
+// Initialize exchange instances outside to reuse connections
+const exchanges: Record<string, any> = {
+    binance: new ccxt.binance({ timeout: 10000 }),
+    bybit: new ccxt.bybit({ timeout: 10000 }),
+    mexc: new ccxt.mexc({ timeout: 10000 }),
+    kucoin: new ccxt.kucoin({ timeout: 10000 }),
+    gate: new ccxt.gate({ timeout: 10000 }),
+    bitget: new ccxt.bitget({ timeout: 10000 }),
+    okx: new ccxt.okx({ timeout: 10000 }),
+    htx: new ccxt.htx({ timeout: 10000 }),
+    bitmart: new ccxt.bitmart({ timeout: 10000 }),
+    digifinex: new ccxt.digifinex({ timeout: 10000 })
+};
 
-        const results = await Promise.allSettled(fetchers.map(f => f()));
+export async function GET(req: Request) {
+    try {
+        const url = new URL(req.url);
+        const sinceParam = url.searchParams.get('since');
+
+        const now = new Date();
+        const sunday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - now.getUTCDay(), 0, 0, 0, 0));
+        const sundayTs = Math.floor(sunday.getTime() / 1000);
+
+        // If `since` param provided, use it (clamped to Sunday to prevent very old data)
+        const sinceTs = sinceParam ? Math.max(parseInt(sinceParam), sundayTs) : null;
+
+        // Calculate limit: from since -> now (+120 buffer for safety), capped at 2000
+        const limit = sinceTs
+            ? Math.min(Math.floor((Date.now() / 1000 - sinceTs) / 60) + 120, 2000)
+            : 2000;
+
+        const fetchSince = sinceTs ? sinceTs * 1000 : undefined; // ms for CCXT
+
+        const exchangeIds = Object.keys(exchanges);
+
+        const allResults = await Promise.allSettled(exchangeIds.map(async (id) => {
+            try {
+                const ohlcv = await exchanges[id].fetchOHLCV('BTC/USDT', '1m', fetchSince, limit);
+                return ohlcv.map((k: any) => ({ t: Math.floor(k[0] / 1000), v: k[4] }));
+            } catch (e) {
+                return [];
+            }
+        }));
+
         const priceGroups: Record<number, number[]> = {};
 
-        results.forEach(res => {
+        allResults.forEach(res => {
             if (res.status === 'fulfilled' && Array.isArray(res.value)) {
                 res.value.forEach((p: any) => {
-                    const t = p.t;
-                    if (!priceGroups[t]) priceGroups[t] = [];
-                    priceGroups[t].push(p.v);
+                    if (p.t >= sundayTs) {
+                        if (!priceGroups[p.t]) priceGroups[p.t] = [];
+                        priceGroups[p.t].push(p.v);
+                    }
                 });
             }
         });
@@ -80,15 +65,22 @@ export async function GET() {
             const vals = priceGroups[t];
             vals.sort((a, b) => a - b);
             const mid = Math.floor(vals.length / 2);
-            const medianPrice = vals.length % 2 !== 0 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
-            return { time: t, value: medianPrice };
+            return { time: t, value: vals.length % 2 !== 0 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2 };
         });
 
         return NextResponse.json({
-            history: history.slice(-limit),
-            source: "standard_10_cex_median",
-            sources_count: results.filter(r => r.status === 'fulfilled').length,
+            history,
+            source: "ccxt_optimized_1m",
+            range_start: sundayTs,
+            sources_count: allResults.filter(r => r.status === 'fulfilled' && (r.value as any[]).length > 0).length,
             timestamp: Math.floor(Date.now() / 1000)
+        }, {
+            headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Cache-Control': 'no-store, max-age=0'
+            }
         });
 
     } catch (err: any) {

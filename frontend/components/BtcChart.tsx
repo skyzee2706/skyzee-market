@@ -16,11 +16,38 @@ interface BtcChartProps {
     strikePrice?: number;
 }
 
+// ── LocalStorage price cache (fills CCXT lag gap across page refreshes) ──
+const LS_KEY = 'btc_rt_cache';
+const LS_MAX_HOURS = 2;
+
+function loadStoredPrices(): PricePoint[] {
+    try {
+        if (typeof window === 'undefined') return [];
+        const raw = localStorage.getItem(LS_KEY);
+        if (!raw) return [];
+        const data = JSON.parse(raw) as PricePoint[];
+        const cutoff = Math.floor(Date.now() / 1000) - LS_MAX_HOURS * 3600;
+        return data.filter(p => p.time > cutoff);
+    } catch { return []; }
+}
+
+function savePrice(point: PricePoint) {
+    try {
+        if (typeof window === 'undefined') return;
+        const stored = loadStoredPrices();
+        // Deduplicate within 14s window, keep last 480 points
+        const updated = [...stored.filter(p => p.time < point.time - 14), point].slice(-480);
+        localStorage.setItem(LS_KEY, JSON.stringify(updated));
+    } catch { }
+}
+
 export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime, bettingEndTime, strikePrice }: BtcChartProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [width, setWidth] = useState(0);
     const [history, setHistory] = useState<PricePoint[]>([]);
     const [livePrice, setLivePrice] = useState<number | null>(null);
+    // Binance WebSocket candles — fills CCXT lag gap with real data
+    const [wsCandles, setWsCandles] = useState<PricePoint[]>([]);
 
     // Interactive state
     const [hoverPoint, setHoverPoint] = useState<PricePoint | null>(null);
@@ -47,14 +74,14 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
         async function fetchHistory() {
             if (!startTime || !endTime) return;
             try {
-                const res = await fetch("/api/history", { cache: "no-store" });
+                const res = await fetch(`/api/history?since=${startTime - 600}`, { cache: "no-store" });
                 if (!res.ok) throw new Error("History API failed");
                 const data = await res.json();
                 const raw = data.history || [];
                 const currentNow = Math.floor(Date.now() / 1000);
 
                 const filtered = raw
-                    .filter((p: any) => p.time >= startTime && p.time <= Math.min(endTime, currentNow))
+                    .filter((p: any) => p.time >= (startTime - 3600) && p.time <= Math.min(endTime, currentNow + 60))
                     .sort((a: any, b: any) => a.time - b.time);
 
                 if (isMounted) setHistory(filtered);
@@ -63,7 +90,7 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
             }
         }
         fetchHistory();
-        const t = setInterval(fetchHistory, 10000);
+        const t = setInterval(fetchHistory, 60000); // 60s — history is 1-min candles, no need to poll faster
         return () => { isMounted = false; clearInterval(t); };
     }, [startTime, endTime]);
 
@@ -81,17 +108,78 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
         fetchLive();
         const t = setInterval(fetchLive, 2000);
         return () => { isMounted = false; clearInterval(t); };
-    }, []);
+    }, [endTime, startTime]);
+
+    // ── Binance REST: fill gap between CCXT history end and now ──
+    useEffect(() => {
+        if (!startTime || !endTime) return;
+        let isMounted = true;
+        async function fillGap() {
+            const now = Math.floor(Date.now() / 1000);
+            const limitMinutes = Math.min(Math.floor((now - startTime!) / 60) + 30, 1000);
+            try {
+                const res = await fetch(
+                    `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limitMinutes}`,
+                    { cache: 'no-store' }
+                );
+                if (!res.ok) return;
+                const raw: any[][] = await res.json();
+                const candles: PricePoint[] = raw.map(k => ({
+                    time: Math.floor(k[0] / 1000),
+                    value: parseFloat(k[4]), // close price
+                })).filter(p => p.time >= startTime! && p.time <= endTime!);
+                if (isMounted) setWsCandles(candles);
+            } catch { }
+        }
+        fillGap();
+        // Refresh every 60s to pick up newly closed candles
+        const t = setInterval(fillGap, 60000);
+        return () => { isMounted = false; clearInterval(t); };
+    }, [startTime, endTime]);
+
+    // ── Binance WebSocket: update current (open) candle in real-time ──
+    useEffect(() => {
+        if (!startTime || !endTime) return;
+        const now = Math.floor(Date.now() / 1000);
+        if (now > endTime!) return; // don't connect after market ends
+        const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@kline_1m');
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                const k = data.k;
+                if (!k) return;
+                const klineStart = Math.floor(Number(k.t) / 1000);
+                const closePrice = parseFloat(k.c);
+                if (klineStart < startTime! || klineStart > endTime!) return;
+                setWsCandles(prev => {
+                    const filtered = prev.filter(p => p.time !== klineStart);
+                    return [...filtered, { time: klineStart, value: closePrice }]
+                        .sort((a, b) => a.time - b.time);
+                });
+            } catch { }
+        };
+        ws.onerror = () => ws.close();
+        return () => ws.close();
+    }, [startTime, endTime]);
 
     const allPoints = useMemo(() => {
-        const points = [...history];
         const now = Math.floor(Date.now() / 1000);
-        // Ensure we have a valid startTime to compare against
-        if (livePrice && (!points.length || now > points[points.length - 1].time) && startTime && now <= (endTime || now + 1)) {
-            points.push({ time: now, value: livePrice });
+        // Merge CCXT history with Binance candles (CCXT = 1h+ ago, Binance = recent gap)
+        const combined = new Map<number, number>();
+        history.forEach(p => combined.set(p.time, p.value));
+        wsCandles.forEach(p => combined.set(p.time, p.value)); // Binance overwrites where overlap
+        const merged = Array.from(combined.entries())
+            .map(([time, value]) => ({ time, value }))
+            .filter(p => p.time >= (startTime ?? 0) && p.time <= Math.min(endTime ?? now, now))
+            .sort((a, b) => a.time - b.time);
+
+        // Always append current live dot (median 10 CEX)
+        const lastTime = merged.length > 0 ? merged[merged.length - 1].time : 0;
+        if (livePrice && startTime && now <= (endTime ?? now + 1) && now > lastTime) {
+            merged.push({ time: now, value: livePrice });
         }
-        return points;
-    }, [history, livePrice, startTime, endTime]);
+        return merged;
+    }, [history, wsCandles, livePrice, startTime, endTime]);
 
     const scale = useMemo(() => {
         if (!startTime || !endTime || !width || !strikePrice) return null;
@@ -101,7 +189,11 @@ export function BtcChart({ symbol = "BTCUSDT", height = 480, startTime, endTime,
 
         // Calculate symmetric range centering strikePrice
         const maxDelta = prices.length > 0 ? Math.max(...prices.map(p => Math.abs(p - midP))) : 50;
-        const buffer = Math.max(maxDelta, 40) * 1.5;
+        // Buffer: always fit all data points + 15% padding, with 1% minimum of strikePrice
+        // Do NOT cap at 5% — price can move 10%+ on daily/weekly markets
+        const rawBuffer = Math.max(maxDelta * 1.15, midP * 0.01);
+        const buffer = rawBuffer;
+
 
         const minScale = midP - buffer;
         const maxScale = midP + buffer;

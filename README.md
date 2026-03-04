@@ -1,46 +1,66 @@
-# Sky Market — Web3 Prediction Market dApp
+# SKY Market — Decentralized BTC Prediction Market
 
-> A Polymarket-inspired decentralized prediction market running on the Ethereum Sepolia testnet.  
-> Built with Solidity 0.8.20, Chainlink Oracles, Next.js 14, wagmi v2, viem, and RainbowKit.
+> A Polymarket-inspired on-chain prediction market on Ethereum Sepolia testnet.  
+> Built with Solidity, Next.js 14, wagmi v2, viem, RainbowKit, CCXT, and Binance WebSocket.
 
----
-
-## 🚀 Key Features
-
-- **On-Chain Truth:** All markets are resolved deterministically using Chainlink Price Feeds (BTC/USD and ETH/USD).
-- **Time-Gated Betting Windows:** Betting closes dynamically *prior* to settlement (e.g., 15 mins before for hourly, 12 hours for daily) to prevent last-minute sniping and ensure fairness.
-- **Transparent Settlement Tracking:** The exact fractional Chainlink precision price is saved permanently on-chain in `settlementPrice` when the market resolves.
-- **Zero-Gas Live Simulated Oracle:** Real-time Binance API integration on the frontend provides a dynamic, continuous price chart for free, while the PM2 backend bot perfectly syncs and injects the same momentary price on-chain at closure using `resolveWithCustomPrice()`.
-- **Resettable Volume Leaderboard:** Tracks trading volumes natively utilizing `BetPlaced` Event Logs directly from Web3, sortable and viewable instantly without centralized backend servers. 
-- **Automated Market Bots:** Built-in Node/PM2 configurations (`auto-market.ts`) autonomously resolve expiring markets and indefinitely spin up matching recursive markets on automated schedules (Hourly, Daily, Weekly).
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-sky--market--alpha.vercel.app-brightgreen)](https://sky-market-alpha.vercel.app)
+[![Sepolia](https://img.shields.io/badge/Network-Sepolia%20Testnet-blue)](https://sepolia.etherscan.io)
 
 ---
 
-## 📁 Folder Structure
+## 🚀 What is SKY Market?
+
+SKY Market lets users bet on whether **BTC/USD will be above or below a target price** at a specific time. Markets run on a fully automated schedule — no manual intervention needed.
+
+- **Hourly Markets** — Betting closes 10 minutes before end
+- **Daily Markets** — Betting closes 12 hours before midnight UTC
+
+Markets are created, managed, and resolved entirely on-chain by an automated bot.
+
+---
+
+## ✨ Key Features
+
+| Feature | Description |
+|---|---|
+| **On-Chain Settlement** | Markets resolved via `resolveWithCustomPrice()` using a median price from 10 CEXes |
+| **Real-Time Chart** | 3-layer chart: CCXT 10-CEX history + Binance REST gap fill + Binance WebSocket live candle |
+| **Time-Gated Betting** | Betting windows close before settlement to prevent last-second sniping |
+| **Platform Fee** | 1% fee paid upfront in ETH per bet. Winners claim 100% proportional payout |
+| **Faucet** | Claim free SkyUSDT to start betting |
+| **Portfolio History** | View all past bets and claim winnings |
+| **Auto-Scheduler Bot** | PM2 daemon creates and resolves all markets on schedule |
+| **Price Parity** | Bot resolution uses same Vercel-deployed median price as the chart live dot |
+
+---
+
+## 📁 Project Structure
 
 ```
-BOT WHITELIST/
+sky-market/
 ├── contracts/
-│   ├── IPriceOracle.sol        ← Swappable Oracle Interface 
-│   ├── ChainlinkOracle.sol     ← Sepolia BTC/USD implementation
-│   ├── PredictionMarket.sol    ← Core market logic, holds liquidity
-│   ├── MarketFactory.sol       ← Factory contract tracking new markets
-│   └── SkyUSDT.sol             ← Mock ERC-20 token for test betting
+│   ├── IPriceOracle.sol        ← Swappable oracle interface
+│   ├── ChainlinkOracle.sol     ← Chainlink BTC/USD fallback
+│   ├── PredictionMarket.sol    ← Core market: betting, resolution, payouts
+│   ├── MarketFactory.sol       ← Factory tracking all deployed markets
+│   └── SkyUSDT.sol             ← Mock ERC-20 faucet token
 ├── scripts/
-│   ├── deploy.ts               ← Contract deployer 
-│   ├── seed-markets.ts         ← Creates initial hourly/daily/weekly markets
-│   ├── auto-market.ts          ← PM2 background scheduler bot
-│   └── export-abi.js           ← Exports ABI bindings to Next.js
+│   ├── deploy.ts               ← Deploy all contracts to Sepolia
+│   └── auto-market.ts          ← PM2 bot: auto-create & resolve markets
 ├── frontend/
-│   ├── app/                    ← Next.js 14 App Router
-│   │   ├── page.tsx            ← Live Markets Grid
-│   │   ├── history/            ← User Portfolio & Settled bets
-│   │   ├── leaderboard/        ← Top bettors ranked by Event Log volume
-│   │   └── market/[address]/   ← Individual detail betting page
+│   ├── app/
+│   │   ├── page.tsx            ← Live Markets grid
+│   │   ├── history/            ← User portfolio & settled bets
+│   │   └── market/[address]/   ← Market detail + betting panel
 │   ├── components/
-│   │   └── BtcChart.tsx        ← Realtime tracking oracle graph
-│   └── .env.local.example      ← Next.js environment variables
-├── package.json
+│   │   ├── BtcChart.tsx        ← Real-time SVG price chart
+│   │   ├── BetPanel.tsx        ← Bet UI + approval flow
+│   │   ├── Navbar.tsx          ← Navigation + wallet connect
+│   │   └── FaucetModal.tsx     ← Faucet claim modal
+│   └── app/api/
+│       ├── price/route.ts      ← Live price: median from 10 CEXes
+│       └── history/route.ts    ← OHLCV history with `since` param
+├── ecosystem.config.js         ← PM2 configuration
 └── hardhat.config.ts
 ```
 
@@ -48,20 +68,29 @@ BOT WHITELIST/
 
 ## 🛠 Prerequisites
 
-- **Node.js**: v18 or higher
-- **Wallet**: MetaMask connected to Sepolia Testnet. (Get testnet ETH from [sepoliafaucet.com](https://sepoliafaucet.com))
-- **RPC**: [Infura](https://infura.io) or [Alchemy](https://alchemy.com) URL
-- **WalletConnect ID**: Setup a free project on [WalletConnect Cloud](https://cloud.walletconnect.com)
+- **Node.js** v18+
+- **MetaMask** connected to Sepolia Testnet → [Get test ETH](https://sepoliafaucet.com)
+- **Sepolia RPC** from [Infura](https://infura.io) or [Alchemy](https://alchemy.com)
+- **WalletConnect ID** from [WalletConnect Cloud](https://cloud.walletconnect.com)
 
 ---
 
-## 1️⃣ Deploy Contracts
+## 1️⃣ Setup Environment
 
-Create your `.env` file in the root directory:
 ```bash
+# Root .env (for bot and Hardhat)
 cp .env.example .env
 ```
-Fill out `PRIVATE_KEY` and `SEPOLIA_RPC_URL` inside `.env`. Then run:
+
+```env
+SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/YOUR_KEY
+PRIVATE_KEY=0xyour_wallet_private_key
+NEXT_PUBLIC_FACTORY_ADDRESS=0x...
+```
+
+---
+
+## 2️⃣ Deploy Contracts
 
 ```bash
 npm install
@@ -69,68 +98,84 @@ npx hardhat compile
 npx hardhat run scripts/deploy.ts --network sepolia
 ```
 
-This script deploys the Factory, Mock USDT, and Oracle. **Save the addresses printed out in the console.**
+Save the addresses printed to console, then fill them into `.env`.
 
 ---
 
-## 2️⃣ Run Frontend
+## 3️⃣ Run Frontend
 
-Navigate to `frontend/`:
 ```bash
 cd frontend
 cp .env.local.example .env.local
-```
-
-Inside `.env.local`, map the environment variables based on the deploy output:
-- `NEXT_PUBLIC_FACTORY_ADDRESS=0x...`
-- `NEXT_PUBLIC_TOKEN_ADDRESS=0x...`
-- `NEXT_PUBLIC_ORACLE_ADDRESS=0x...`
-- `NEXT_PUBLIC_ETH_ORACLE_ADDRESS=0x...`
-- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=...`
-
-Start the Next.js app:
-```bash
+# Fill in contract addresses and WalletConnect project ID
 npm run dev
 ```
 
+Visit `http://localhost:3000`
+
 ---
 
-## 3️⃣ Run Autopilot Bots (PM2 Scheduler)
+## 4️⃣ Run Market Bot (PM2)
 
-You do not need to manually create and resolve markets. The system ships with PM2 integration.
+The bot automatically creates Hourly and Daily markets and resolves them at end time.
 
 ```bash
-cd .. # Back to root dir
-npx ts-node scripts/seed-markets.ts  # Seeds the very first batch of active markets
-npx pm2 start auto-market.bat --name auto-market # Starts the recursive checking bot
+# From root directory
+pm2 start ecosystem.config.js
+pm2 logs sky-market-scheduler
 ```
 
-The daemon will now run silently. It checks active markets every 60 seconds. When `endTime` passes, it triggers `resolve()` automatically and spins up the identical market for the next cycle.
+The bot runs on a **60-second sweep** cycle:
+1. Scans all markets on-chain
+2. Resolves any expired markets with the median BTC price at that exact end time
+3. Creates new Hourly and Daily markets if none exist for the next target window
 
 ---
 
-## 4️⃣ Architectural Summary & Fees
+## 5️⃣ Deploy to Vercel
 
-- **Platform Fee**: **1%** on net winnings only. 
-- Original bets are returned cleanly. The owner account can invoke `withdrawFees()` to sweep platform revenue.
-- **Oracle Upgrade Path**: If transitioning to an alt oracle (e.g. Rialo), just deploy an implementation of `IPriceOracle.sol` and call `MarketFactory.setOracle(addr)`. PredictionMarket contracts are intrinsically agnostic.
-
----
-
-## 5️⃣ Vercel Deployment
-
-Because the project places the Next.js app inside a nested `frontend/` folder, you must define the **Root Directory** inside Vercel or the deployment will fail.
-
-1. Import your GitHub repository into Vercel.
-2. Under "Framework Preset", ensure Next.js is selected.
-3. Open **"Root Directory"** and type `frontend`.
-4. Add all environment variables from your `.env.local` to the Vercel Environment Variables section.
-5. Click **Deploy**. Vercel will now properly find and build the Next.js app.
+1. Import the GitHub repo to [Vercel](https://vercel.com)
+2. Set **Root Directory** → `frontend`
+3. Add environment variables from `.env.local`
+4. Deploy
 
 ---
 
-| Link | Resource |
+## 📐 Architecture
+
+```
+User Browser
+    │
+    ├── wagmi/viem  →  Sepolia RPC (read contract state)
+    ├── /api/price  →  10 CEX median (CCXT) — live dot
+    ├── /api/history?since= →  10 CEX OHLCV (CCXT) — main history
+    ├── Binance REST API  →  Gap fill (recent 30-60 candles)
+    └── Binance WebSocket →  Live current candle (real-time)
+
+PM2 Bot (auto-market.ts)
+    │
+    ├── factory.getAllMarkets()  →  scan on-chain
+    ├── /api/history (Vercel)   →  get snapshot price at market end
+    └── market.resolveWithCustomPrice(price)  →  settle on-chain
+```
+
+---
+
+## 💰 Fee Structure
+
+| Action | Fee |
 |---|---|
-| Faucet | [sepoliafaucet.com](https://sepoliafaucet.com) |
-| Explorer | [Sepolia Etherscan](https://sepolia.etherscan.io) |
-| Price Feeds | [Chainlink Testnet](https://docs.chain.link/data-feeds/price-feeds/addresses?network=ethereum&page=1#sepolia-testnet) |
+| Place Bet | 1% of bet amount, paid in ETH upfront |
+| Claim Winnings | Free — 100% proportional payout |
+| Lose | Original bet stays in the losing pool |
+
+---
+
+## 🔗 Resources
+
+| Resource | Link |
+|---|---|
+| Live App | [sky-market-alpha.vercel.app](https://sky-market-alpha.vercel.app) |
+| Sepolia Faucet | [sepoliafaucet.com](https://sepoliafaucet.com) |
+| Sepolia Explorer | [sepolia.etherscan.io](https://sepolia.etherscan.io) |
+| Chainlink Feeds | [docs.chain.link](https://docs.chain.link/data-feeds/price-feeds/addresses?network=ethereum&page=1#sepolia-testnet) |

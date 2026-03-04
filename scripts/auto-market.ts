@@ -12,14 +12,14 @@ dotenv.config();
 
 import { ethers } from "ethers";
 import axios from "axios";
+import * as fs from "fs";
+import * as path from "path";
 
 // ── Config ────────────────────────────────────────────────────────────────
 const RPC_URL = process.env.SEPOLIA_RPC_URL || "";
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 const FACTORY_ADDRESS = process.env.NEXT_PUBLIC_FACTORY_ADDRESS as string;
 const VERCEL_URL = "https://sky-market-alpha.vercel.app";
-
-const HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" };
 
 if (!RPC_URL || !PRIVATE_KEY || !FACTORY_ADDRESS) {
     console.error("❌  Missing required env vars.");
@@ -43,45 +43,27 @@ const MARKET_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const signer = new ethers.Wallet(PRIVATE_KEY, provider);
 
-// ── Internal 10-CEX Fallback Engine (Mirror Logic) ─────────────────────────
+// ── Internal 10-CEX Fallback Engine ─────────────────────────────────────────
 
 async function getInternalLivePrice(): Promise<number> {
-    const timeout = 6000;
-    const f = async (name: string, url: string) => {
-        try {
-            const res = await axios.get(url, { headers: HEADERS, timeout });
-            const d = res.data;
-            if (name === "Binance" || name === "MEXC") return Number(d.price);
-            if (name === "Bybit") return Number(d.result.list[0].lastPrice);
-            if (name === "KuCoin") return Number(d.data.price);
-            if (name === "Gate") return Number(d[0].last);
-            if (name === "Bitget") return Number(d.data[0].lastPr);
-            if (name === "HTX") return Number(d.tick.data[0].price);
-            if (name === "OKX") return Number(d.data[0].last);
-            if (name === "Bitmart") return Number(d.data.last);
-            if (name === "DigiFinex") return Number(d.ticker[0].last);
-            return null;
-        } catch (e: any) { return null; }
-    };
-
-    const results = await Promise.all([
-        f("Binance", "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"),
-        f("Bybit", "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT"),
-        f("MEXC", "https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT"),
-        f("KuCoin", "https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=BTC-USDT"),
-        f("Gate", "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC__USDT"),
-        f("Bitget", "https://api.bitget.com/api/v2/spot/market/tickers?symbol=BTCUSDT"),
-        f("HTX", "https://api.huobi.pro/market/trade?symbol=btcusdt"),
-        f("OKX", "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT"),
-        f("Bitmart", "https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol=BTC_USDT"),
-        f("DigiFinex", "https://openapi.digifinex.com/v3/spot/ticker?symbol=BTC_USDT")
-    ]);
-
-    const prices = results.filter((p): p is number => p !== null && p > 15000);
-    if (prices.length < 2) throw new Error("Internal sources failed");
-    prices.sort((a, b) => a - b);
-    const mid = Math.floor(prices.length / 2);
-    return prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+    try {
+        const ccxt = require('ccxt');
+        const exchangeIds = ['binance', 'bybit', 'mexc', 'kucoin', 'gate', 'bitget', 'htx', 'okx', 'bitmart', 'digifinex'];
+        const results = await Promise.all(exchangeIds.map(async id => {
+            try {
+                const exchange = new ccxt[id]({ timeout: 2500 });
+                const ticker = await exchange.fetchTicker('BTC/USDT');
+                return ticker.last;
+            } catch (e) { return null; }
+        }));
+        const prices = results.filter((p): p is number => p !== null && p > 15000);
+        if (prices.length === 0) throw new Error("Internal sources failed");
+        prices.sort((a, b) => a - b);
+        const mid = Math.floor(prices.length / 2);
+        return prices.length % 2 !== 0 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+    } catch (e: any) {
+        throw new Error("Internal fallback failed: " + e.message);
+    }
 }
 
 // ── Vercel-First Price Engine ─────────────────────────────────────────────
@@ -107,16 +89,26 @@ async function getLivePrice(): Promise<bigint> {
 
 async function getHistoricalPrice(targetTs: number): Promise<bigint> {
     try {
-        console.log(`      📡 Fetching Historical Snapshot from Vercel: ${VERCEL_URL}/api/history ...`);
+        const snapshotTs = targetTs; // Snapshot exactly at end time
+        console.log(`      📡 Fetching Historical Snapshot (T-1s) from Vercel history ...`);
         const res = await axios.get(`${VERCEL_URL}/api/history`, { timeout: 15000 });
         const history = res.data?.history;
 
         if (history && Array.isArray(history) && history.length > 0) {
-            const targetMin = Math.floor(targetTs / 60) * 60;
-            const match = history.find((h: any) => h.time === targetMin);
-            const val = match ? match.value : history[history.length - 1].value;
-            console.log(`      🎯 Snapshot: ${match ? "Exact" : "Latest"} match $${val}`);
-            return BigInt(Math.floor(val * 1e8));
+            const target = snapshotTs;
+            let closest = history[0];
+            let minDiff = Math.abs(history[0].time - target);
+
+            for (const h of history) {
+                const diff = Math.abs(h.time - target);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    closest = h;
+                }
+            }
+
+            console.log(`      🎯 Snapshot: Found closest match $${closest.value} (diff: ${minDiff}s)`);
+            return BigInt(Math.floor(closest.value * 1e8));
         }
         throw new Error("Empty history from Vercel");
     } catch (err: any) {
@@ -125,9 +117,9 @@ async function getHistoricalPrice(targetTs: number): Promise<bigint> {
     }
 }
 
-// ── Helper Logic ──────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────
 
-const formatHour = (ts: number) => `${new Date(ts * 1000).getUTCHours().toString().padStart(2, "0")}:00 UTC`;
+const formatHour = (ts: number) => `${new Date(ts * 1000).getUTCHours().toString().padStart(2, "00")}:00 UTC`;
 const formatDate = (ts: number) => new Date(ts * 1000).toISOString().split("T")[0];
 
 function nextHourUTC() {
@@ -135,82 +127,128 @@ function nextHourUTC() {
     d.setUTCHours(d.getUTCHours() + 1, 0, 0, 0);
     return Math.floor(d.getTime() / 1000);
 }
+
 function nextMidnightUTC() {
     const d = new Date();
     d.setUTCDate(d.getUTCDate() + 1);
     d.setUTCHours(0, 0, 0, 0);
     return Math.floor(d.getTime() / 1000);
 }
-function nextWeekUTC() {
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() + 7);
-    d.setUTCHours(0, 0, 0, 0);
-    return Math.floor(d.getTime() / 1000);
+
+// ── Lock System ──────────────────────────────────────────────────────────
+const LOCK_FILE = path.join(__dirname, "auto-market.lock");
+
+function clearStaleLock() {
+    // Always clear lock on startup to avoid blocks after crashes
+    try { if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE); } catch (e) { }
+}
+
+function acquireLock(): boolean {
+    try {
+        if (fs.existsSync(LOCK_FILE)) {
+            const stats = fs.statSync(LOCK_FILE);
+            if (Date.now() - stats.mtimeMs < 120000) return false; // Lock is fresh (2m)
+            fs.unlinkSync(LOCK_FILE);
+        }
+        fs.writeFileSync(LOCK_FILE, process.pid.toString());
+        return true;
+    } catch (e) { return false; }
+}
+
+function releaseLock() {
+    try { if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE); } catch (e) { }
 }
 
 // ── Main Controller ──────────────────────────────────────────────────────
 
 async function resolveMarkets() {
+    if (!acquireLock()) {
+        console.log("⏳ Another sweep is already running, skipping...");
+        return;
+    }
     try {
         const balance = await provider.getBalance(signer.address);
         console.log(`\n🔍 [SWEEP] Balance: ${ethers.formatEther(balance)} ETH | ${new Date().toISOString()}`);
 
-        const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
+        const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
         const all = await factory.getAllMarkets();
 
-        const scanDepth = 100;
+        // Scan last 500 markets (enough to cover many weeks of hourly + daily)
+        const scanDepth = 500;
         const recent = all.slice(-scanDepth);
         const now = Math.floor(Date.now() / 1000);
 
-        let activeCount = { H: 0, D: 0, W: 0 };
+        const activeEndTimes: Record<string, Set<number>> = { H: new Set(), D: new Set() };
 
         for (const addr of recent) {
             try {
                 const m = new ethers.Contract(addr, MARKET_ABI, signer);
                 const [endTime, resolved, question] = await Promise.all([m.endTime(), m.resolved(), m.question()]);
 
-                // Identify type
-                const isHourly = question.toLowerCase().includes(" at ") && (question.includes(":") || question.includes("utc"));
-                const isDaily = question.toLowerCase().includes("midnight");
-                const tsType = isHourly ? "H" : isDaily ? "D" : "W";
+                const questionLower = question.toLowerCase();
+                const isHourly = (questionLower.includes(" at ") && (questionLower.includes(":") || questionLower.includes("utc"))) || questionLower.includes("hour");
+                const isDaily = questionLower.includes("midnight") || questionLower.includes("daily");
+                const tsType = isHourly ? "H" : isDaily ? "D" : null;
 
-                if (!resolved && now >= Number(endTime)) {
-                    console.log(`   ⚡ RESOLVING: ${question}`);
-                    const price = await getHistoricalPrice(Number(endTime));
-                    const tx = await m.resolveWithCustomPrice(price);
-                    await tx.wait();
-                    console.log(`      ✅ Resolved OK @ $${(Number(price) / 1e8).toFixed(2)}`);
-                } else if (!resolved) {
-                    activeCount[tsType]++;
+                if (!resolved) {
+                    if (now >= Number(endTime)) {
+                        console.log(`   ⚡ RESOLVING: ${question}`);
+                        try {
+                            const price = await getHistoricalPrice(Number(endTime));
+                            const tx = await m.resolveWithCustomPrice(price);
+                            await tx.wait();
+                            console.log(`      ✅ Resolved OK @ $${(Number(price) / 1e8).toFixed(2)}`);
+                        } catch (err: any) {
+                            console.error(`      ❌ Resolve Transact Fail:`, err.shortMessage || err.message);
+                        }
+                    } else if (tsType) {
+                        activeEndTimes[tsType].add(Number(endTime));
+                    }
                 }
             } catch (e: any) {
-                if (e.message.includes("revert")) {
-                    console.error(`   ❌ Revert on ${addr}:`, e.shortMessage || e.message);
-                }
+                console.error(`   ❌ Error processing market ${addr}:`, e.shortMessage || e.message);
             }
         }
 
-        console.log(`   📊 State: ${activeCount.H}H, ${activeCount.D}D, ${activeCount.W}W`);
+        console.log(`   📊 Active Markets: H:${activeEndTimes.H.size}, D:${activeEndTimes.D.size}`);
 
-        // Market Re-creation (Priority)
+        // Market Re-creation — Hourly and Daily only
         const types = [
-            { id: "H", label: "Hourly", getET: nextHourUTC, buffer: 600, active: activeCount.H },
-            { id: "D", label: "Daily", getET: nextMidnightUTC, buffer: 43200, active: activeCount.D },
-            { id: "W", label: "Weekly", getET: nextWeekUTC, buffer: 259200, active: activeCount.W }
+            { id: "H", label: "Hourly", getET: nextHourUTC, buffer: 600 },
+            { id: "D", label: "Daily", getET: nextMidnightUTC, buffer: 43200 }
         ];
 
         for (const t of types) {
-            if (t.active === 0) {
-                try {
-                    console.log(`   🆕 [ACTION] Initializing ${t.label} creation...`);
-                    const p = await getLivePrice();
-                    const et = t.getET();
+            const targetET = t.getET();
+            const alreadyExists = activeEndTimes[t.id].has(targetET);
 
-                    let q;
+            if (!alreadyExists) {
+                try {
+                    console.log(`   🆕 [ACTION] Creating ${t.label} market for ${new Date(targetET * 1000).toISOString()}...`);
+                    const p = await getLivePrice();
+
+                    // ── Re-verify on-chain before TX to prevent race condition ──
+                    const freshAll = await factory.getAllMarkets();
+                    const freshRecent = freshAll.slice(-300); // Scan last 300 to be safe
+                    let raceConflict = false;
+                    for (const addr of freshRecent) {
+                        try {
+                            const m2 = new ethers.Contract(addr, MARKET_ABI, provider);
+                            const [freshET, freshResolved] = await Promise.all([m2.endTime(), m2.resolved()]);
+                            if (!freshResolved && Number(freshET) === targetET) {
+                                raceConflict = true;
+                                console.log(`   ⚠️ Race conflict detected for ${targetET}. Skipping.`);
+                                break;
+                            }
+                        } catch { /* skip */ }
+                    }
+                    if (raceConflict) continue;
+
+                    const et = targetET;
                     const formattedPrice = (Number(p) / 1e8).toLocaleString();
+                    let q: string;
                     if (t.id === "H") q = `Will BTC/USD be above $${formattedPrice} at ${formatHour(et)}?`;
-                    else if (t.id === "D") q = `Will BTC/USD be above $${formattedPrice} by midnight ${formatDate(et)}?`;
-                    else q = `Will BTC/USD be above $${formattedPrice} by ${formatDate(et)}?`;
+                    else q = `Will BTC/USD be above $${formattedPrice} by midnight ${formatDate(et)}?`;
 
                     console.log(`      🚀 Creating: ${q}`);
                     const tx = await factory.createMarket(q, p, et, et - t.buffer);
@@ -224,12 +262,15 @@ async function resolveMarkets() {
         }
 
     } catch (err: any) { console.error("❌ Sweep failure:", err.shortMessage || err.message || err); }
+    finally { releaseLock(); }
 }
 
 async function main() {
-    console.log("🚀 Rial Market Vercel-Sync Bot Starting...");
+    console.log("🚀 Rial Market Bot Starting...");
+    clearStaleLock(); // Clear any leftover lock from previous crash
     await resolveMarkets();
-    setInterval(resolveMarkets, 30_000);
+    // Use 60s interval to reduce overlap risk between sweeps
+    setInterval(resolveMarkets, 60_000);
 }
 
 main().catch(console.error);

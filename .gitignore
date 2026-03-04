@@ -16,3 +16,15 @@ compile_log.txt
 addr.txt
 *.log
 *.har
+
+# Bot runtime files
+scripts/auto-market.lock
+price_history.csv
+final_factory.txt
+debug_bot.log
+
+# Next.js build
+frontend/.next/
+
+# Misc
+runner.js

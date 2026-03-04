@@ -10,8 +10,10 @@
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.10",
     "@tanstack/react-query": "^5.90.21",
+    "ccxt": "^4.5.40",
     "lightweight-charts": "^5.1.0",
     "next": "16.1.6",
+    "protobufjs": "^7.2.4",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "viem": "^2.46.3",
