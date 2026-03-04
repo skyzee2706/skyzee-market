@@ -1,34 +1,30 @@
 # Table of contents
 
 * [Introduction](README.md)
-
-## Getting Started
-
-* [Prerequisites](getting-started/prerequisites.md)
-* [Deploy Contracts](getting-started/deploy-contracts.md)
-* [Run Frontend](getting-started/run-frontend.md)
-* [Run the Bot](getting-started/run-the-bot.md)
-* [Deploy to Vercel](getting-started/deploy-to-vercel.md)
-
-## How It Works
-
-* [Market Types](how-it-works/market-types.md)
-* [Betting & Payouts](how-it-works/betting-and-payouts.md)
-* [Price Resolution](how-it-works/price-resolution.md)
-* [Real-Time Chart](how-it-works/real-time-chart.md)
+* [Architecture Overview](architecture.md)
 
 ## Smart Contracts
 
-* [PredictionMarket](smart-contracts/prediction-market.md)
-* [MarketFactory](smart-contracts/market-factory.md)
-* [SkyUSDT](smart-contracts/sky-usdt.md)
+* [PredictionMarket](contracts/prediction-market.md)
+* [MarketFactory](contracts/market-factory.md)
+* [SkyUSDT (Faucet Token)](contracts/sky-usdt.md)
+* [Oracle Interface](contracts/oracle.md)
 
-## Bot & Automation
+## Price Infrastructure
 
-* [auto-market.ts](bot/auto-market.md)
-* [PM2 Configuration](bot/pm2-configuration.md)
+* [Price Oracle](price/price-oracle.md)
+* [Historical Data (OHLCV)](price/historical-data.md)
+* [Real-Time Chart Architecture](price/chart-architecture.md)
 
-## API Reference
+## Market Automation
 
-* [/api/price](api/price.md)
-* [/api/history](api/history.md)
+* [Bot Overview](bot/overview.md)
+* [Market Creation Logic](bot/market-creation.md)
+* [Market Resolution Logic](bot/resolution.md)
+* [Duplicate Prevention](bot/duplicate-prevention.md)
+
+## Economics
+
+* [Betting Mechanics](economics/betting-mechanics.md)
+* [Fee Structure](economics/fees.md)
+* [Payout Formula](economics/payouts.md)
