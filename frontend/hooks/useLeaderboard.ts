@@ -51,16 +51,33 @@ export function useLeaderboard() {
                     return;
                 }
 
+                // Get current block number to handle pagination
+                const currentBlock = await client.getBlockNumber();
+                const MAX_BLOCK_RANGE = 49999n;
+
                 // Aggregate volume per user from BetPlaced events across all markets
                 const volumeMap = new Map<string, { volume: bigint; yes: number; no: number }>();
 
                 for (const market of markets) {
-                    const logs = await client.getLogs({
-                        address: market,
-                        event: BetPlacedEvent,
-                        fromBlock: LEADERBOARD_START_BLOCK,
-                        toBlock: "latest",
-                    });
+                    const logs = [];
+                    let fromBlock = LEADERBOARD_START_BLOCK;
+
+                    while (fromBlock <= currentBlock) {
+                        let toBlock = fromBlock + MAX_BLOCK_RANGE;
+                        if (toBlock > currentBlock) {
+                            toBlock = currentBlock;
+                        }
+
+                        const chunkLogs = await client.getLogs({
+                            address: market,
+                            event: BetPlacedEvent,
+                            fromBlock,
+                            toBlock,
+                        });
+                        logs.push(...chunkLogs);
+
+                        fromBlock = toBlock + 1n;
+                    }
 
                     for (const log of logs) {
                         const { user, isYes, amount } = log.args as { user: `0x${string}`; isYes: boolean; amount: bigint };
